@@ -105,6 +105,9 @@ spec:
     - name: git-credentials
       description: Git credentials for cloning and pushing
       optional: true
+    - name: sonar-credentials
+      description: SonarQube credentials (token and host URL)
+      optional: true
 
   tasks:
     # Stage 1: Clone repository
@@ -200,6 +203,8 @@ spec:
       workspaces:
         - name: source
           workspace: shared-workspace
+        - name: sonar-credentials
+          workspace: sonar-credentials
       params:
         - name: project-key
           value: colorforge-backend
