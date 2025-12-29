@@ -21,7 +21,7 @@ images:
 - digest: sha256:a1768da32fbb9a716c98cd1b86e9e328557a94552e37662f2187b27fe00f41cd
   name: harbor.local/colorforge/backend
   newName: harbor.local/colorforge/backend
-- digest: sha256:3dc3d6ec5e48cf3d4f6e813358dd780a652eae41b00100135a8af5dc74337f07
+- digest: sha256:22acefc02b8537023b5a120e60e1945ffc230c2fb0c2aaca4b04c96d47c98962
   name: harbor.local/colorforge/frontend
   newName: harbor.local/colorforge/frontend
 - name: mycolorforge-api
