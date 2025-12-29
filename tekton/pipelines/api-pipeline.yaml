@@ -286,7 +286,7 @@ spec:
         - name: git-url
           value: $(params.manifest-repo)
         - name: git-branch
-          value: main
+          value: master
         - name: overlay-path
           value: $(params.overlay-path)
         - name: image-name
