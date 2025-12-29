@@ -1,0 +1,339 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: colorforge-frontend-pipeline
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: colorforge
+    app.kubernetes.io/component: frontend
+spec:
+  description: |
+    CI/CD Pipeline DevSecOps para ColorForge Next.js Frontend.
+
+    Stages:
+    1. Clone
+    2. Gitleaks (Secret Scan) - paralelo com Build
+    3. Build + npm audit (SCA)
+    4. SonarQube (SAST) - paralelo com Build Image
+    5. Build Image
+    6. Trivy Scan (Container)
+    7. Update Manifests (GitOps)
+
+    DevSecOps:
+    - Gitleaks: Scan de secrets no código
+    - npm audit: Vulnerabilidades em dependências
+    - SonarQube: Análise estática de segurança
+    - Trivy: Vulnerabilidades em containers
+  params:
+    # Git parameters
+    - name: git-url
+      type: string
+      description: Git repository URL
+      default: https://github.com/r7next/mycolorforge-front.git
+    - name: git-revision
+      type: string
+      description: Git revision to build
+      default: master
+
+    # Image parameters
+    - name: image-registry
+      type: string
+      description: Container registry URL
+      default: harbor.local
+    - name: image-repository
+      type: string
+      description: Image repository path
+      default: colorforge/frontend
+    - name: image-tag
+      type: string
+      description: Image tag
+      default: latest
+
+    # Build parameters
+    - name: node-version
+      type: string
+      default: "20"
+    - name: package-manager
+      type: string
+      default: "npm"
+
+    # Registry options
+    - name: skip-tls-verify
+      type: string
+      description: Skip TLS verification for self-signed certs
+      default: "true"
+
+    # Security parameters
+    - name: security-scan-enabled
+      type: string
+      description: Enable security scans (Gitleaks, npm audit)
+      default: "true"
+    - name: fail-on-security-issues
+      type: string
+      description: Fail pipeline on security issues
+      default: "false"
+
+    # SonarQube parameters
+    - name: sonar-enabled
+      type: string
+      description: Enable SonarQube analysis
+      default: "true"
+    - name: sonar-quality-gate
+      type: string
+      description: Wait for Quality Gate result
+      default: "false"
+
+    # Environment URLs (embedded at build time)
+    - name: api-url
+      type: string
+      description: API URL for the frontend to connect to (include /api/v1)
+      default: "https://api.colorforge.local/api/v1"
+    - name: app-url
+      type: string
+      description: Frontend app URL
+      default: "https://colorforge.local"
+    - name: storage-url
+      type: string
+      description: Storage URL for images (MinIO)
+      default: "https://minio.colorforge.local/mycolorforge"
+
+    # Observability parameters (embedded at build time)
+    - name: faro-enabled
+      type: string
+      description: Enable Faro observability
+      default: "true"
+    - name: faro-url
+      type: string
+      description: Faro/OTEL collector URL
+      default: "https://otel.mycolorforge.com"
+    - name: app-name
+      type: string
+      description: Application name for telemetry
+      default: "colorforge-frontend"
+    - name: app-version
+      type: string
+      description: Application version
+      default: "1.0.0"
+
+    # GitOps parameters
+    - name: manifest-repo
+      type: string
+      description: Repository containing Kubernetes manifests
+      default: https://github.com/r7next/mycolorforge-infra.git
+    - name: overlay-path
+      type: string
+      description: Path to Kustomize overlay
+      default: k8s/overlays/staging
+
+  workspaces:
+    - name: shared-workspace
+      description: Shared workspace for pipeline tasks
+    - name: node-cache
+      description: Node modules cache (persistente)
+    - name: trivy-cache
+      description: Trivy vulnerability database cache
+    - name: docker-credentials
+      description: Docker config.json for registry authentication
+    - name: git-credentials
+      description: Git credentials for cloning and pushing
+      optional: true
+
+  tasks:
+    # Stage 1: Clone repository
+    - name: clone
+      taskRef:
+        name: git-clone
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+        - name: basic-auth
+          workspace: git-credentials
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+        - name: depth
+          value: "1"
+
+    # Stage 2a: Gitleaks - Secret Scanning (paralelo com build)
+    - name: gitleaks
+      taskRef:
+        name: gitleaks-scan
+      runAfter:
+        - clone
+      when:
+        - input: "$(params.security-scan-enabled)"
+          operator: in
+          values: ["true"]
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: source-path
+          value: "."
+        - name: fail-on-leak
+          value: $(params.fail-on-security-issues)
+
+    # Stage 2b: Build Next.js application (paralelo com gitleaks)
+    - name: build
+      taskRef:
+        name: nodejs-build
+      runAfter:
+        - clone
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+        - name: cache
+          workspace: node-cache
+      params:
+        - name: context
+          value: "."
+        - name: node-version
+          value: $(params.node-version)
+        - name: package-manager
+          value: $(params.package-manager)
+        - name: build-command
+          value: build
+
+    # Stage 2c: npm audit - Dependency Scan (paralelo com build)
+    - name: npm-audit
+      taskRef:
+        name: owasp-dependency-check
+      runAfter:
+        - clone
+      when:
+        - input: "$(params.security-scan-enabled)"
+          operator: in
+          values: ["true"]
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: project-type
+          value: nodejs
+        - name: source-path
+          value: "."
+        - name: fail-on-cvss
+          value: "7"
+
+    # Stage 3a: SonarQube Analysis (paralelo com build-image, após build)
+    - name: sonarqube
+      taskRef:
+        name: sonarqube-scan
+      runAfter:
+        - build
+      when:
+        - input: "$(params.sonar-enabled)"
+          operator: in
+          values: ["true"]
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: project-key
+          value: colorforge-frontend
+        - name: project-name
+          value: "ColorForge Frontend"
+        - name: project-version
+          value: $(params.image-tag)
+        - name: source-path
+          value: "."
+        - name: language
+          value: typescript
+        - name: coverage-report
+          value: coverage/lcov.info
+        - name: quality-gate-wait
+          value: $(params.sonar-quality-gate)
+        - name: exclusions
+          value: "**/node_modules/**,**/.next/**,**/coverage/**,**/*.test.ts,**/*.test.tsx,**/*.spec.ts,**/*.spec.tsx"
+
+    # Stage 3b: Build container image (paralelo com sonarqube, após build)
+    - name: build-image
+      taskRef:
+        name: kaniko-build
+      runAfter:
+        - build
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+        - name: dockerconfig
+          workspace: docker-credentials
+      params:
+        - name: image
+          value: $(params.image-registry)/$(params.image-repository)
+        - name: tag
+          value: $(params.image-tag)
+        - name: dockerfile
+          value: Dockerfile
+        - name: context
+          value: "."
+        - name: cache
+          value: "true"
+        - name: cache-repo
+          value: $(params.image-registry)/$(params.image-repository)-cache
+        - name: skip-tls-verify
+          value: $(params.skip-tls-verify)
+        - name: build-args
+          value:
+            - --build-arg=NEXT_PUBLIC_API_URL=$(params.api-url)
+            - --build-arg=NEXT_PUBLIC_APP_URL=$(params.app-url)
+            - --build-arg=NEXT_PUBLIC_STORAGE_URL=$(params.storage-url)
+            - --build-arg=NEXT_PUBLIC_FARO_ENABLED=$(params.faro-enabled)
+            - --build-arg=NEXT_PUBLIC_FARO_URL=$(params.faro-url)
+            - --build-arg=NEXT_PUBLIC_APP_NAME=$(params.app-name)
+            - --build-arg=NEXT_PUBLIC_APP_VERSION=$(params.app-version)
+
+    # Stage 4: Trivy - Container Vulnerability Scan
+    - name: trivy-scan
+      taskRef:
+        name: trivy-scan
+      runAfter:
+        - build-image
+      workspaces:
+        - name: cache
+          workspace: trivy-cache
+        - name: dockerconfig
+          workspace: docker-credentials
+      params:
+        - name: image
+          value: $(params.image-registry)/$(params.image-repository):$(params.image-tag)
+        - name: severity
+          value: "HIGH,CRITICAL"
+        - name: exit-code
+          value: "0"
+        - name: skip-tls-verify
+          value: $(params.skip-tls-verify)
+
+    # Stage 5: Update Kubernetes manifests (GitOps)
+    - name: update-manifests
+      taskRef:
+        name: kustomize-update
+      runAfter:
+        - trivy-scan
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+        - name: basic-auth
+          workspace: git-credentials
+      params:
+        - name: git-url
+          value: $(params.manifest-repo)
+        - name: git-branch
+          value: main
+        - name: overlay-path
+          value: $(params.overlay-path)
+        - name: image-name
+          value: $(params.image-registry)/$(params.image-repository)
+        - name: new-tag
+          value: $(params.image-tag)
+        - name: new-digest
+          value: $(tasks.build-image.results.image-digest)
+
+  results:
+    - name: image-url
+      description: Full image URL with digest
+      value: $(tasks.build-image.results.image-url)
+    - name: commit-sha
+      description: Git commit that was built
+      value: $(tasks.clone.results.commit)

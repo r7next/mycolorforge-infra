@@ -1,0 +1,43 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sonarqube-ingress
+  namespace: sonarqube
+  labels:
+    app.kubernetes.io/name: sonarqube
+    app.kubernetes.io/component: server
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    # Para upload de relatórios grandes
+    nginx.ingress.kubernetes.io/client-body-buffer-size: "50m"
+spec:
+  ingressClassName: nginx
+  rules:
+    # Acesso local via sonar.local
+    - host: sonar.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sonarqube
+                port:
+                  number: 9000
+    # Acesso externo via sonar.mycolorforge.com
+    - host: sonar.mycolorforge.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sonarqube
+                port:
+                  number: 9000
+  tls:
+    - hosts:
+        - sonar.mycolorforge.com
+      secretName: sonarqube-tls

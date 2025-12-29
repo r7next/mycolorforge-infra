@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflared-config
+  namespace: colorforge
+  labels:
+    app: cloudflared
+data:
+  config.yaml: |
+    # Cloudflare Tunnel Configuration
+    # Replace TUNNEL_ID with your actual tunnel ID
+    tunnel: 64c19266-f8de-4c11-b2e3-77c2f8947428
+    credentials-file: /etc/cloudflared-credentials/credentials.json
+
+    # Metrics for health checks
+    metrics: 0.0.0.0:2000
+
+    # Ingress rules - route traffic to internal services
+    ingress:
+      # Frontend - main domain
+      - hostname: mycolorforge.com
+        service: http://frontend-service.colorforge.svc.cluster.local:3000
+        originRequest:
+          noTLSVerify: true
+
+      # Frontend - www subdomain
+      - hostname: www.mycolorforge.com
+        service: http://frontend-service.colorforge.svc.cluster.local:3000
+        originRequest:
+          noTLSVerify: true
+
+      # API - api subdomain
+      - hostname: api.mycolorforge.com
+        service: http://api-service.colorforge.svc.cluster.local:8080
+        originRequest:
+          noTLSVerify: true
+
+      # Tekton Webhook - for Azure DevOps CI/CD triggers
+      - hostname: webhook.mycolorforge.com
+        service: http://el-colorforge-listener.tekton-pipelines.svc.cluster.local:8080
+        originRequest:
+          noTLSVerify: true
+
+      # Grafana - observability dashboard
+      - hostname: grafana.mycolorforge.com
+        service: http://grafana.observability.svc.cluster.local:3000
+        originRequest:
+          noTLSVerify: true
+
+      # OpenTelemetry Collector - for Faro frontend telemetry
+      - hostname: otel.mycolorforge.com
+        service: http://otel-collector.observability.svc.cluster.local:4318
+        originRequest:
+          noTLSVerify: true
+
+      # Tekton Dashboard - CI/CD pipeline management
+      - hostname: tekton.mycolorforge.com
+        service: http://tekton-dashboard.tekton-pipelines.svc.cluster.local:9097
+        originRequest:
+          noTLSVerify: true
+
+      # ArgoCD - GitOps deployment dashboard
+      - hostname: argocd.mycolorforge.com
+        service: https://argocd-server.argocd.svc.cluster.local:443
+        originRequest:
+          noTLSVerify: true
+
+      # MinIO Storage - object storage for images
+      - hostname: storage.mycolorforge.com
+        service: http://minio-service.colorforge.svc.cluster.local:9000
+        originRequest:
+          noTLSVerify: true
+
+      # MinIO Console - admin interface
+      - hostname: minio.mycolorforge.com
+        service: http://minio-service.colorforge.svc.cluster.local:9001
+        originRequest:
+          noTLSVerify: true
+
+      # Catch-all rule (required)
+      - service: http_status:404
+

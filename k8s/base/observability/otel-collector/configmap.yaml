@@ -1,0 +1,136 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: observability
+data:
+  otel-collector.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+            cors:
+              allowed_origins:
+                - "https://mycolorforge.com"
+                - "https://www.mycolorforge.com"
+                - "http://localhost:3000"
+              allowed_headers:
+                - "*"
+
+      # Prometheus receiver for scraping metrics
+      prometheus:
+        config:
+          scrape_configs:
+            - job_name: 'otel-collector'
+              scrape_interval: 10s
+              static_configs:
+                - targets: ['localhost:8888']
+
+    processors:
+      batch:
+        timeout: 10s
+        send_batch_size: 1000
+        send_batch_max_size: 2000
+
+      memory_limiter:
+        check_interval: 1s
+        limit_mib: 512
+        spike_limit_mib: 128
+
+      # Add resource attributes
+      resource:
+        attributes:
+          - key: service.namespace
+            value: colorforge
+            action: upsert
+          - key: deployment.environment
+            value: production
+            action: upsert
+
+      # Filter out health checks and internal paths
+      filter:
+        error_mode: ignore
+        traces:
+          span:
+            - 'attributes["http.target"] == "/health"'
+            - 'attributes["http.target"] == "/ready"'
+            - 'attributes["http.target"] == "/metrics"'
+
+      # Tail sampling for traces (keep errors, slow requests, sample rest)
+      tail_sampling:
+        decision_wait: 10s
+        num_traces: 100
+        expected_new_traces_per_sec: 10
+        policies:
+          - name: errors
+            type: status_code
+            status_code: {status_codes: [ERROR]}
+          - name: slow-traces
+            type: latency
+            latency: {threshold_ms: 1000}
+          - name: probabilistic
+            type: probabilistic
+            probabilistic: {sampling_percentage: 10}
+
+    exporters:
+      # Prometheus exporter for metrics
+      prometheus:
+        endpoint: 0.0.0.0:8889
+        namespace: colorforge
+        send_timestamps: true
+        metric_expiration: 5m
+        resource_to_telemetry_conversion:
+          enabled: false
+        add_metric_suffixes: false
+
+      # Loki exporter for logs (using loki receiver format)
+      loki:
+        endpoint: http://loki:3100/loki/api/v1/push
+        default_labels_enabled:
+          exporter: true
+          job: true
+
+      # OTLP exporter to Tempo for traces
+      otlp/tempo:
+        endpoint: tempo:4317
+        tls:
+          insecure: true
+
+      # Debug exporter (for troubleshooting)
+      debug:
+        verbosity: basic
+        sampling_initial: 5
+        sampling_thereafter: 200
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+      zpages:
+        endpoint: 0.0.0.0:55679
+
+    service:
+      extensions: [health_check, zpages]
+      telemetry:
+        logs:
+          level: info
+        metrics:
+          address: 0.0.0.0:8888
+
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, filter, tail_sampling, batch, resource]
+          exporters: [otlp/tempo]
+
+        metrics:
+          receivers: [otlp, prometheus]
+          processors: [memory_limiter, batch, resource]
+          exporters: [prometheus]
+
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch, resource]
+          exporters: [loki]

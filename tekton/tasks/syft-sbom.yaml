@@ -1,0 +1,84 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: syft-sbom
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: colorforge
+spec:
+  description: |
+    Gera Software Bill of Materials (SBOM) usando Syft.
+    Lista todas as dependências e componentes da imagem.
+  params:
+    - name: image
+      type: string
+      description: Imagem para gerar SBOM
+    - name: output-format
+      type: string
+      description: Formato do SBOM (spdx-json, cyclonedx-json, syft-json)
+      default: "cyclonedx-json"
+    - name: output-file
+      type: string
+      description: Nome do arquivo SBOM
+      default: "sbom.json"
+  workspaces:
+    - name: output
+      description: Workspace para salvar o SBOM
+    - name: dockerconfig
+      description: Docker config.json para autenticação
+  results:
+    - name: sbom-path
+      description: Caminho do arquivo SBOM gerado
+    - name: packages-count
+      description: Número de pacotes encontrados
+  steps:
+    - name: generate-sbom
+      image: anchore/syft:v0.100.0
+      env:
+        - name: DOCKER_CONFIG
+          value: $(workspaces.dockerconfig.path)
+      script: |
+        #!/bin/sh
+        set -e
+
+        echo "=== Syft SBOM Generator ==="
+        echo "Image: $(params.image)"
+        echo "Format: $(params.output-format)"
+        echo ""
+
+        OUTPUT_PATH="$(workspaces.output.path)/$(params.output-file)"
+
+        echo "=== Generating SBOM ==="
+        syft "$(params.image)" \
+          --output "$(params.output-format)=${OUTPUT_PATH}" \
+          --scope all-layers
+
+        echo ""
+        echo "=== SBOM Generated ==="
+
+        # Count packages
+        PACKAGES_COUNT=0
+        if [ -f "${OUTPUT_PATH}" ]; then
+          case "$(params.output-format)" in
+            *json*)
+              PACKAGES_COUNT=$(cat "${OUTPUT_PATH}" | grep -c '"name"' || echo "0")
+              ;;
+          esac
+        fi
+
+        echo "Packages Found: ${PACKAGES_COUNT}"
+        echo "SBOM Path: ${OUTPUT_PATH}"
+
+        # Write results
+        printf "%s" "${OUTPUT_PATH}" > "$(results.sbom-path.path)"
+        printf "%s" "${PACKAGES_COUNT}" > "$(results.packages-count.path)"
+
+        echo ""
+        echo "=== SBOM Generation Complete ==="
+      computeResources:
+        requests:
+          memory: "512Mi"
+          cpu: "250m"
+        limits:
+          memory: "2Gi"
+          cpu: "1000m"

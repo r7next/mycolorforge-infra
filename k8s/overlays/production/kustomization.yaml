@@ -1,0 +1,127 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: colorforge
+
+resources:
+- ../../base
+- ../../base/cloudflare
+
+# Production labels
+labels:
+- pairs:
+    app.kubernetes.io/instance: production
+    environment: production
+
+# Production annotations
+commonAnnotations:
+  argocd.argoproj.io/sync-options: Prune=true
+
+# Image configuration - production images
+images:
+- digest: sha256:6f6528df4727722c5ea993ba6c32f13665359d1481626e89b8d6e0ecbdc921a0
+  name: harbor.local/colorforge/frontend
+  newName: harbor.local/colorforge/frontend
+- name: mycolorforge-api
+  newName: harbor.local/colorforge/backend
+  newTag: latest
+- name: mycolorforge-frontend
+  newName: harbor.local/colorforge/frontend
+  newTag: latest
+
+# Production replica counts
+replicas:
+- count: 2
+  name: api
+- count: 2
+  name: frontend
+- count: 2
+  name: cloudflared
+
+# ConfigMap generator for production config
+configMapGenerator:
+- behavior: create
+  literals:
+  - ENV=production
+  - LOG_LEVEL=info
+  - CORS_ORIGINS=https://mycolorforge.com,https://www.mycolorforge.com,https://api.mycolorforge.com
+  name: colorforge-config
+
+# Patches for production
+
+
+  # Remove ingress in production (using Cloudflare Tunnel instead)
+patches:
+- patch: |
+    - op: add
+      path: /spec/template/spec/imagePullSecrets
+      value:
+        - name: harbor-pull-secret
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/requests/memory
+      value: "256Mi"
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/requests/cpu
+      value: "200m"
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/limits/memory
+      value: "512Mi"
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/limits/cpu
+      value: "500m"
+    - op: replace
+      path: /spec/template/spec/containers/0/env/2
+      value:
+        name: DATABASE_URL
+        valueFrom:
+          secretKeyRef:
+            name: postgres-credentials
+            key: DATABASE_URL
+    - op: replace
+      path: /spec/template/spec/containers/0/env/5
+      value:
+        name: CORS_ORIGINS
+        value: "https://mycolorforge.com,https://www.mycolorforge.com,https://api.mycolorforge.com"
+    - op: replace
+      path: /spec/template/spec/containers/0/env/6
+      value:
+        name: OTEL_ENABLED
+        value: "true"
+  target:
+    kind: Deployment
+    name: api
+- patch: |
+    - op: add
+      path: /spec/template/spec/imagePullSecrets
+      value:
+        - name: harbor-pull-secret
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/requests/memory
+      value: "256Mi"
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/requests/cpu
+      value: "200m"
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/limits/memory
+      value: "512Mi"
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/limits/cpu
+      value: "500m"
+    - op: replace
+      path: /spec/template/spec/containers/0/env/0
+      value:
+        name: NEXT_PUBLIC_API_URL
+        value: "https://api.mycolorforge.com/api/v1"
+    - op: replace
+      path: /spec/template/spec/containers/0/env/1
+      value:
+        name: NEXT_PUBLIC_APP_URL
+        value: "https://mycolorforge.com"
+  target:
+    kind: Deployment
+    name: frontend
+- patch: |
+    $patch: delete
+  target:
+    kind: Ingress
+    name: mycolorforge-ingress

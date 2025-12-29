@@ -1,0 +1,104 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: colorforge
+
+resources:
+  - ../../base
+  - hpa.yaml
+  - pdb.yaml
+
+# Production-specific labels
+commonLabels:
+  environment: production
+  app.kubernetes.io/instance: prod
+
+# Production-specific annotations
+commonAnnotations:
+  argocd.argoproj.io/sync-options: Prune=true
+
+# Image configuration - updated by Tekton pipeline
+images:
+  - name: colorforge-backend
+    newName: harbor.local/colorforge/backend
+    newTag: latest
+  - name: colorforge-frontend
+    newName: harbor.local/colorforge/frontend
+    newTag: latest
+
+# Production replica counts
+replicas:
+  - name: colorforge-backend
+    count: 3
+  - name: colorforge-frontend
+    count: 2
+
+# ConfigMap generator for environment-specific config
+configMapGenerator:
+  - name: colorforge-config
+    behavior: create
+    literals:
+      - ENV=production
+      - LOG_LEVEL=info
+      - CORS_ORIGINS=https://colorforge.local,https://api.colorforge.local
+
+# Strategic merge patches for production settings
+patches:
+  # API deployment patches
+  - target:
+      kind: Deployment
+      name: colorforge-backend
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: "256Mi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: "200m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "512Mi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "500m"
+      - op: add
+        path: /spec/template/spec/affinity
+        value:
+          podAntiAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                podAffinityTerm:
+                  labelSelector:
+                    matchLabels:
+                      app.kubernetes.io/component: backend
+                  topologyKey: kubernetes.io/hostname
+
+  # Frontend deployment patches
+  - target:
+      kind: Deployment
+      name: colorforge-frontend
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: "256Mi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: "200m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "512Mi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "500m"
+
+  # Ingress production settings
+  - target:
+      kind: Ingress
+      name: colorforge-ingress
+    patch: |
+      - op: replace
+        path: /spec/rules/0/host
+        value: colorforge.local
+      - op: replace
+        path: /spec/rules/1/host
+        value: api.colorforge.local

@@ -1,0 +1,156 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: owasp-dependency-check
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+spec:
+  description: |
+    Run OWASP Dependency Check to identify vulnerabilities in project dependencies.
+    Supports Go (using govulncheck) and Node.js (using npm audit).
+  params:
+    - name: project-type
+      type: string
+      description: Type of project to scan (go, nodejs)
+    - name: source-path
+      type: string
+      description: Path to source code within workspace
+      default: "."
+    - name: fail-on-cvss
+      type: string
+      description: Fail build on CVSS score >= this value (0-10, 0 to disable)
+      default: "7"
+    - name: include-dev-dependencies
+      type: string
+      description: Include dev dependencies in scan (nodejs only)
+      default: "false"
+  workspaces:
+    - name: source
+      description: Workspace containing source code
+  results:
+    - name: vulnerabilities-found
+      description: Number of vulnerabilities found
+    - name: critical-count
+      description: Number of critical/high severity vulnerabilities
+    - name: scan-status
+      description: Scan status (passed/failed)
+  steps:
+    - name: scan-dependencies
+      image: golang:1.23-alpine
+      workingDir: $(workspaces.source.path)/$(params.source-path)
+      script: |
+        #!/bin/sh
+        set -e
+
+        echo "=== OWASP Dependency Check ==="
+        echo "Project Type: $(params.project-type)"
+        echo "Source Path: $(params.source-path)"
+        echo "Fail on CVSS >= $(params.fail-on-cvss)"
+        echo ""
+
+        VULN_COUNT=0
+        CRITICAL_COUNT=0
+        SCAN_STATUS="passed"
+
+        case "$(params.project-type)" in
+          "go")
+            echo "=== Installing govulncheck ==="
+            go install golang.org/x/vuln/cmd/govulncheck@latest
+
+            echo ""
+            echo "=== Running govulncheck ==="
+            set +e
+            govulncheck -json ./... > vuln-report.json 2>&1
+            SCAN_EXIT=$?
+            set -e
+
+            # Parse results
+            if [ -f vuln-report.json ]; then
+              VULN_COUNT=$(cat vuln-report.json | grep -c '"osv"' || echo "0")
+              CRITICAL_COUNT=$(cat vuln-report.json | grep -c '"affecting"' || echo "0")
+            fi
+
+            # Show human-readable output
+            echo ""
+            govulncheck ./... 2>&1 || true
+
+            if [ ${SCAN_EXIT} -ne 0 ] && [ "$(params.fail-on-cvss)" != "0" ]; then
+              SCAN_STATUS="failed"
+            fi
+            ;;
+
+          "nodejs")
+            echo "=== Installing Node.js ==="
+            apk add --no-cache nodejs npm
+
+            echo ""
+            echo "=== Running npm audit ==="
+
+            AUDIT_ARGS=""
+            if [ "$(params.include-dev-dependencies)" = "false" ]; then
+              AUDIT_ARGS="--omit=dev"
+            fi
+
+            set +e
+            npm audit ${AUDIT_ARGS} --json > audit-report.json 2>&1
+            SCAN_EXIT=$?
+            set -e
+
+            # Parse results
+            if [ -f audit-report.json ]; then
+              VULN_COUNT=$(cat audit-report.json | grep -o '"vulnerabilities":' | head -1 || echo "0")
+              CRITICAL_COUNT=$(cat audit-report.json | grep -c '"critical"' || echo "0")
+              HIGH_COUNT=$(cat audit-report.json | grep -c '"high"' || echo "0")
+              CRITICAL_COUNT=$((CRITICAL_COUNT + HIGH_COUNT))
+            fi
+
+            # Show human-readable output
+            echo ""
+            npm audit ${AUDIT_ARGS} 2>&1 || true
+
+            # Check severity threshold
+            if [ ${SCAN_EXIT} -ne 0 ]; then
+              FAIL_THRESHOLD=$(params.fail-on-cvss)
+              if [ "${FAIL_THRESHOLD}" != "0" ]; then
+                # npm audit exits non-zero for high+ by default
+                if [ "${FAIL_THRESHOLD}" -le "7" ]; then
+                  SCAN_STATUS="failed"
+                fi
+              fi
+            fi
+            ;;
+
+          *)
+            echo "ERROR: Unknown project type: $(params.project-type)"
+            echo "Supported types: go, nodejs"
+            exit 1
+            ;;
+        esac
+
+        echo ""
+        echo "=== Scan Summary ==="
+        echo "Vulnerabilities Found: ${VULN_COUNT}"
+        echo "Critical/High Severity: ${CRITICAL_COUNT}"
+        echo "Scan Status: ${SCAN_STATUS}"
+
+        # Write results
+        printf "%s" "${VULN_COUNT}" > "$(results.vulnerabilities-found.path)"
+        printf "%s" "${CRITICAL_COUNT}" > "$(results.critical-count.path)"
+        printf "%s" "${SCAN_STATUS}" > "$(results.scan-status.path)"
+
+        if [ "${SCAN_STATUS}" = "failed" ]; then
+          echo ""
+          echo "FAILED: Critical vulnerabilities found!"
+          exit 1
+        fi
+
+        echo ""
+        echo "=== Scan Passed ==="
+      computeResources:
+        requests:
+          memory: "512Mi"
+          cpu: "250m"
+        limits:
+          memory: "2Gi"
+          cpu: "1"

@@ -1,0 +1,184 @@
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: mycolorforge-pr-template
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+  annotations:
+    description: |
+      Template for Pull Request CI runs.
+      Runs tests and builds but does NOT deploy or update manifests.
+spec:
+  params:
+    - name: git-revision
+      description: The PR head SHA
+    - name: git-url
+      description: The git repository URL
+    - name: git-ref
+      description: The git ref
+
+  resourcetemplates:
+    # API CI (no deploy)
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        generateName: mycolorforge-api-pr-
+        namespace: tekton-pipelines
+        labels:
+          app.kubernetes.io/part-of: mycolorforge
+          tekton.dev/pipeline: mycolorforge-api-ci
+          triggers.tekton.dev/trigger: github-pr
+      spec:
+        pipelineSpec:
+          params:
+            - name: git-url
+              type: string
+            - name: git-revision
+              type: string
+          workspaces:
+            - name: shared-workspace
+            - name: go-cache
+          tasks:
+            - name: clone
+              taskRef:
+                name: git-clone
+              workspaces:
+                - name: output
+                  workspace: shared-workspace
+              params:
+                - name: url
+                  value: $(params.git-url)
+                - name: revision
+                  value: $(params.git-revision)
+
+            - name: test
+              taskRef:
+                name: golang-test
+              runAfter:
+                - clone
+              workspaces:
+                - name: source
+                  workspace: shared-workspace
+                - name: cache
+                  workspace: go-cache
+              params:
+                - name: context
+                  value: mycolorforge-service/apps/api
+                - name: packages
+                  value: "./..."
+                - name: coverage-threshold
+                  value: "0"
+
+            - name: build
+              taskRef:
+                name: golang-build
+              runAfter:
+                - test
+              workspaces:
+                - name: source
+                  workspace: shared-workspace
+                - name: cache
+                  workspace: go-cache
+              params:
+                - name: context
+                  value: mycolorforge-service/apps/api
+                - name: package
+                  value: ./cmd/server
+                - name: output
+                  value: bin/server
+
+        params:
+          - name: git-url
+            value: $(tt.params.git-url)
+          - name: git-revision
+            value: $(tt.params.git-revision)
+        workspaces:
+          - name: shared-workspace
+            volumeClaimTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 2Gi
+          - name: go-cache
+            persistentVolumeClaim:
+              claimName: go-cache-pvc
+        taskRunTemplate:
+          serviceAccountName: tekton-pipeline-sa
+        timeouts:
+          pipeline: "30m0s"
+
+    # Frontend CI (no deploy)
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        generateName: mycolorforge-frontend-pr-
+        namespace: tekton-pipelines
+        labels:
+          app.kubernetes.io/part-of: mycolorforge
+          tekton.dev/pipeline: mycolorforge-frontend-ci
+          triggers.tekton.dev/trigger: github-pr
+      spec:
+        pipelineSpec:
+          params:
+            - name: git-url
+              type: string
+            - name: git-revision
+              type: string
+          workspaces:
+            - name: shared-workspace
+            - name: node-cache
+          tasks:
+            - name: clone
+              taskRef:
+                name: git-clone
+              workspaces:
+                - name: output
+                  workspace: shared-workspace
+              params:
+                - name: url
+                  value: $(params.git-url)
+                - name: revision
+                  value: $(params.git-revision)
+
+            - name: build
+              taskRef:
+                name: nodejs-build
+              runAfter:
+                - clone
+              workspaces:
+                - name: source
+                  workspace: shared-workspace
+                - name: cache
+                  workspace: node-cache
+              params:
+                - name: context
+                  value: mycolorforge-front
+                - name: package-manager
+                  value: npm
+                - name: build-command
+                  value: build
+
+        params:
+          - name: git-url
+            value: $(tt.params.git-url)
+          - name: git-revision
+            value: $(tt.params.git-revision)
+        workspaces:
+          - name: shared-workspace
+            volumeClaimTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 4Gi
+          - name: node-cache
+            persistentVolumeClaim:
+              claimName: node-cache-pvc
+        taskRunTemplate:
+          serviceAccountName: tekton-pipeline-sa
+        timeouts:
+          pipeline: "30m0s"

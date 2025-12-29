@@ -1,0 +1,42 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: backend-prod-
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: colorforge
+    environment: production
+spec:
+  pipelineRef:
+    name: colorforge-backend-pipeline
+  params:
+    - name: git-url
+      value: "https://github.com/r7next/mycolorforge-service.git"
+    - name: git-revision
+      value: "main"
+    - name: image-registry
+      value: "harbor.local"
+    - name: image-repository
+      value: "colorforge/backend"
+    - name: image-tag
+      value: "latest"
+    - name: skip-tls-verify
+      value: "true"
+  workspaces:
+    - name: shared-workspace
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 2Gi
+          storageClassName: local-path
+    - name: go-cache
+      emptyDir: {}
+    - name: docker-credentials
+      secret:
+        secretName: harbor-registry-credentials
+    - name: git-credentials
+      secret:
+        secretName: github-credentials

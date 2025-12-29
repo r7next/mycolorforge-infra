@@ -1,0 +1,202 @@
+---
+# Namespace for Tekton resources
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+---
+# Service Account for pipeline execution
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tekton-pipeline-sa
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+secrets:
+  - name: harbor-credentials
+  - name: git-credentials
+---
+# Service Account for triggers
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: tekton-triggers-sa
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+---
+# Role for pipeline execution
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tekton-pipeline-role
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+rules:
+  # Pipeline resources
+  - apiGroups: ["tekton.dev"]
+    resources:
+      - pipelineruns
+      - taskruns
+      - pipelines
+      - tasks
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # PVC for workspaces
+  - apiGroups: [""]
+    resources:
+      - persistentvolumeclaims
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Pods and logs
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+    verbs: ["get", "list", "watch"]
+  # ConfigMaps and Secrets
+  - apiGroups: [""]
+    resources:
+      - configmaps
+      - secrets
+    verbs: ["get", "list", "watch"]
+  # Events
+  - apiGroups: [""]
+    resources:
+      - events
+    verbs: ["get", "list", "watch", "create"]
+---
+# RoleBinding for pipeline SA
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tekton-pipeline-rolebinding
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+subjects:
+  - kind: ServiceAccount
+    name: tekton-pipeline-sa
+    namespace: tekton-pipelines
+roleRef:
+  kind: Role
+  name: tekton-pipeline-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# Role for triggers
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tekton-triggers-role
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+rules:
+  # Trigger resources
+  - apiGroups: ["triggers.tekton.dev"]
+    resources:
+      - eventlisteners
+      - triggerbindings
+      - triggertemplates
+      - triggers
+      - interceptors
+    verbs: ["get", "list", "watch"]
+  # Create PipelineRuns
+  - apiGroups: ["tekton.dev"]
+    resources:
+      - pipelineruns
+      - taskruns
+    verbs: ["create", "get", "list"]
+  # ConfigMaps for caching
+  - apiGroups: [""]
+    resources:
+      - configmaps
+    verbs: ["get", "list", "watch"]
+  # Secrets for webhook validation
+  - apiGroups: [""]
+    resources:
+      - secrets
+    verbs: ["get", "list", "watch"]
+---
+# RoleBinding for triggers SA
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tekton-triggers-rolebinding
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+subjects:
+  - kind: ServiceAccount
+    name: tekton-triggers-sa
+    namespace: tekton-pipelines
+roleRef:
+  kind: Role
+  name: tekton-triggers-role
+  apiGroup: rbac.authorization.k8s.io
+---
+# ClusterRole for cross-namespace operations (e.g., deploying to mycolorforge namespace)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tekton-pipeline-clusterrole
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+rules:
+  # Read cluster-wide resources
+  - apiGroups: [""]
+    resources:
+      - namespaces
+    verbs: ["get", "list"]
+  # Manage deployments in target namespace
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - statefulsets
+    verbs: ["get", "list", "watch", "update", "patch"]
+---
+# ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tekton-pipeline-clusterrolebinding
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+subjects:
+  - kind: ServiceAccount
+    name: tekton-pipeline-sa
+    namespace: tekton-pipelines
+roleRef:
+  kind: ClusterRole
+  name: tekton-pipeline-clusterrole
+  apiGroup: rbac.authorization.k8s.io
+---
+# EventListener ClusterRole for interceptors
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tekton-triggers-clusterrole
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+rules:
+  - apiGroups: ["triggers.tekton.dev"]
+    resources:
+      - clusterinterceptors
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tekton-triggers-clusterrolebinding
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+subjects:
+  - kind: ServiceAccount
+    name: tekton-triggers-sa
+    namespace: tekton-pipelines
+roleRef:
+  kind: ClusterRole
+  name: tekton-triggers-clusterrole
+  apiGroup: rbac.authorization.k8s.io

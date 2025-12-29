@@ -1,0 +1,41 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mycolorforge-api-pdb
+  namespace: mycolorforge
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+    app.kubernetes.io/component: api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: api
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mycolorforge-frontend-pdb
+  namespace: mycolorforge
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+    app.kubernetes.io/component: frontend
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: frontend
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: postgres-pdb
+  namespace: mycolorforge
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+    app.kubernetes.io/component: database
+spec:
+  maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: database

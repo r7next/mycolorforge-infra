@@ -1,0 +1,195 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: sonarqube-scan
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: colorforge
+spec:
+  description: |
+    Executa análise de código com SonarQube Scanner.
+    Suporta projetos Go, TypeScript/JavaScript, e outros.
+  params:
+    - name: project-key
+      type: string
+      description: Chave única do projeto no SonarQube
+    - name: project-name
+      type: string
+      description: Nome do projeto no SonarQube
+    - name: project-version
+      type: string
+      description: Versão do projeto
+      default: "1.0"
+    - name: source-path
+      type: string
+      description: Caminho para o código fonte (relativo ao workspace)
+      default: "."
+    - name: language
+      type: string
+      description: Linguagem principal (go, typescript, javascript)
+      default: "go"
+    - name: coverage-report
+      type: string
+      description: Caminho para relatório de cobertura
+      default: ""
+    - name: exclusions
+      type: string
+      description: Padrões de arquivos a excluir
+      default: "**/vendor/**,**/node_modules/**,**/*_test.go,**/test/**"
+    - name: quality-gate-wait
+      type: string
+      description: Aguardar resultado do Quality Gate
+      default: "true"
+    - name: quality-gate-timeout
+      type: string
+      description: Timeout para Quality Gate (segundos)
+      default: "300"
+  workspaces:
+    - name: source
+      description: Workspace contendo o código fonte
+    - name: sonar-credentials
+      description: Credenciais do SonarQube (SONAR_TOKEN, SONAR_HOST_URL)
+  results:
+    - name: quality-gate-status
+      description: Status do Quality Gate (OK, WARN, ERROR, NONE)
+    - name: analysis-id
+      description: ID da análise no SonarQube
+  steps:
+    - name: sonar-scan
+      image: sonarsource/sonar-scanner-cli:5.0
+      workingDir: $(workspaces.source.path)/$(params.source-path)
+      env:
+        - name: SONAR_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: sonarqube-token
+              key: SONAR_TOKEN
+        - name: SONAR_HOST_URL
+          valueFrom:
+            secretKeyRef:
+              name: sonarqube-token
+              key: SONAR_HOST_URL
+      script: |
+        #!/bin/bash
+        set -e
+
+        echo "=== SonarQube Scanner ==="
+        echo "Project: $(params.project-key)"
+        echo "Version: $(params.project-version)"
+        echo "Language: $(params.language)"
+        echo "Source: $(params.source-path)"
+        echo ""
+
+        # Build scanner arguments
+        SCANNER_ARGS=""
+        SCANNER_ARGS="${SCANNER_ARGS} -Dsonar.projectKey=$(params.project-key)"
+        SCANNER_ARGS="${SCANNER_ARGS} -Dsonar.projectName=$(params.project-name)"
+        SCANNER_ARGS="${SCANNER_ARGS} -Dsonar.projectVersion=$(params.project-version)"
+        SCANNER_ARGS="${SCANNER_ARGS} -Dsonar.sources=."
+        SCANNER_ARGS="${SCANNER_ARGS} -Dsonar.exclusions=$(params.exclusions)"
+
+        # Language-specific settings
+        case "$(params.language)" in
+          go)
+            SCANNER_ARGS="${SCANNER_ARGS} -Dsonar.language=go"
+            SCANNER_ARGS="${SCANNER_ARGS} -Dsonar.go.coverage.reportPaths=$(params.coverage-report)"
+            SCANNER_ARGS="${SCANNER_ARGS} -Dsonar.tests=."
+            SCANNER_ARGS="${SCANNER_ARGS} -Dsonar.test.inclusions=**/*_test.go"
+            ;;
+          typescript|javascript)
+            SCANNER_ARGS="${SCANNER_ARGS} -Dsonar.language=ts"
+            SCANNER_ARGS="${SCANNER_ARGS} -Dsonar.typescript.lcov.reportPaths=$(params.coverage-report)"
+            SCANNER_ARGS="${SCANNER_ARGS} -Dsonar.tests=."
+            SCANNER_ARGS="${SCANNER_ARGS} -Dsonar.test.inclusions=**/*.test.ts,**/*.test.tsx,**/*.spec.ts,**/*.spec.tsx"
+            ;;
+        esac
+
+        echo "=== Running SonarQube Scanner ==="
+        sonar-scanner ${SCANNER_ARGS}
+
+        echo ""
+        echo "=== Scan Complete ==="
+      computeResources:
+        requests:
+          memory: "512Mi"
+          cpu: "500m"
+        limits:
+          memory: "2Gi"
+          cpu: "1000m"
+
+    - name: quality-gate
+      image: curlimages/curl:8.5.0
+      env:
+        - name: SONAR_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: sonarqube-token
+              key: SONAR_TOKEN
+        - name: SONAR_HOST_URL
+          valueFrom:
+            secretKeyRef:
+              name: sonarqube-token
+              key: SONAR_HOST_URL
+      script: |
+        #!/bin/sh
+        set -e
+
+        if [ "$(params.quality-gate-wait)" != "true" ]; then
+          echo "Quality Gate check skipped"
+          printf "NONE" > "$(results.quality-gate-status.path)"
+          printf "N/A" > "$(results.analysis-id.path)"
+          exit 0
+        fi
+
+        echo "=== Checking Quality Gate ==="
+
+        # Wait for analysis to be processed
+        TIMEOUT=$(params.quality-gate-timeout)
+        ELAPSED=0
+        INTERVAL=10
+
+        while [ $ELAPSED -lt $TIMEOUT ]; do
+          # Get analysis status
+          RESPONSE=$(curl -s -u "${SONAR_TOKEN}:" \
+            "${SONAR_HOST_URL}/api/qualitygates/project_status?projectKey=$(params.project-key)")
+
+          STATUS=$(echo "$RESPONSE" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)
+
+          if [ -n "$STATUS" ] && [ "$STATUS" != "NONE" ]; then
+            echo "Quality Gate Status: $STATUS"
+            printf "%s" "$STATUS" > "$(results.quality-gate-status.path)"
+
+            # Get analysis ID
+            ANALYSIS_ID=$(curl -s -u "${SONAR_TOKEN}:" \
+              "${SONAR_HOST_URL}/api/project_analyses/search?project=$(params.project-key)" \
+              | grep -o '"key":"[^"]*"' | head -1 | cut -d'"' -f4)
+            printf "%s" "$ANALYSIS_ID" > "$(results.analysis-id.path)"
+
+            if [ "$STATUS" = "ERROR" ]; then
+              echo ""
+              echo "Quality Gate FAILED!"
+              echo "Check details at: ${SONAR_HOST_URL}/dashboard?id=$(params.project-key)"
+              exit 1
+            fi
+
+            echo ""
+            echo "=== Quality Gate Passed ==="
+            exit 0
+          fi
+
+          echo "Waiting for analysis to complete... (${ELAPSED}s/${TIMEOUT}s)"
+          sleep $INTERVAL
+          ELAPSED=$((ELAPSED + INTERVAL))
+        done
+
+        echo "Quality Gate check timed out"
+        printf "TIMEOUT" > "$(results.quality-gate-status.path)"
+        printf "N/A" > "$(results.analysis-id.path)"
+        exit 1
+      computeResources:
+        requests:
+          memory: "64Mi"
+          cpu: "50m"
+        limits:
+          memory: "128Mi"
+          cpu: "100m"

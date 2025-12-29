@@ -1,0 +1,176 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: kustomize-update
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+spec:
+  description: |
+    Update Kustomize overlay with new image tag/digest.
+    Commits the change to trigger ArgoCD sync (GitOps pattern).
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL for the manifests
+    - name: git-branch
+      type: string
+      description: Branch to update
+      default: main
+    - name: overlay-path
+      type: string
+      description: Path to Kustomize overlay directory
+      default: infra/k8s/overlays/prod
+    - name: image-name
+      type: string
+      description: Image name (without tag) to update in kustomization.yaml
+    - name: new-tag
+      type: string
+      description: New image tag
+    - name: new-digest
+      type: string
+      description: New image digest (takes precedence over tag if provided)
+      default: ""
+    - name: git-user-name
+      type: string
+      description: Git user name for commit
+      default: "Tekton Pipeline"
+    - name: git-user-email
+      type: string
+      description: Git user email for commit
+      default: "tekton@mycolorforge.com"
+  workspaces:
+    - name: source
+      description: Workspace for cloning the repo
+    - name: ssh-credentials
+      description: SSH credentials for git push
+      optional: true
+    - name: basic-auth
+      description: Basic auth credentials for git push
+      optional: true
+  results:
+    - name: commit-sha
+      description: SHA of the update commit
+  steps:
+    - name: update-and-push
+      image: alpine:3.19
+      workingDir: $(workspaces.source.path)
+      env:
+        - name: HOME
+          value: /tmp
+        - name: GIT_URL
+          value: $(params.git-url)
+        - name: GIT_BRANCH
+          value: $(params.git-branch)
+        - name: OVERLAY_PATH
+          value: $(params.overlay-path)
+        - name: IMAGE_NAME
+          value: $(params.image-name)
+        - name: NEW_TAG
+          value: $(params.new-tag)
+        - name: NEW_DIGEST
+          value: $(params.new-digest)
+        - name: GIT_USER_NAME
+          value: $(params.git-user-name)
+        - name: GIT_USER_EMAIL
+          value: $(params.git-user-email)
+        - name: WORKSPACE_SOURCE_PATH
+          value: $(workspaces.source.path)
+        - name: WORKSPACE_SSH_CREDENTIALS_BOUND
+          value: $(workspaces.ssh-credentials.bound)
+        - name: WORKSPACE_SSH_CREDENTIALS_PATH
+          value: $(workspaces.ssh-credentials.path)
+        - name: WORKSPACE_BASIC_AUTH_BOUND
+          value: $(workspaces.basic-auth.bound)
+        - name: WORKSPACE_BASIC_AUTH_PATH
+          value: $(workspaces.basic-auth.path)
+      script: |
+        #!/bin/sh
+        set -eu
+
+        # Install required tools
+        apk add --no-cache git curl bash
+
+        echo "=== Kustomize Image Update ==="
+        echo "Repository: ${GIT_URL}"
+        echo "Branch: ${GIT_BRANCH}"
+        echo "Overlay: ${OVERLAY_PATH}"
+        echo "Image: ${IMAGE_NAME}"
+        echo "New Tag: ${NEW_TAG}"
+        echo "New Digest: ${NEW_DIGEST}"
+        echo ""
+
+        # Install kustomize
+        curl -sL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz" | tar xz -C /tmp
+        chmod +x /tmp/kustomize
+
+        # Setup basic auth if provided
+        if [ "${WORKSPACE_BASIC_AUTH_BOUND}" = "true" ]; then
+          echo "Configuring git credentials..."
+          git config --global credential.helper store
+
+          if [ -f "${WORKSPACE_BASIC_AUTH_PATH}/username" ] && [ -f "${WORKSPACE_BASIC_AUTH_PATH}/password" ]; then
+            GIT_USERNAME=$(cat "${WORKSPACE_BASIC_AUTH_PATH}/username")
+            GIT_PASSWORD=$(cat "${WORKSPACE_BASIC_AUTH_PATH}/password")
+            GIT_HOST=$(echo "${GIT_URL}" | sed -E 's|https?://([^/]+).*|\1|')
+            echo "https://${GIT_USERNAME}:${GIT_PASSWORD}@${GIT_HOST}" > /tmp/.git-credentials
+            chmod 600 /tmp/.git-credentials
+            echo "Configured git credentials for ${GIT_HOST}"
+          fi
+        fi
+
+        # Clone repository
+        echo "=== Cloning Repository ==="
+        rm -rf manifest-repo
+        git clone --depth=1 --branch="${GIT_BRANCH}" "${GIT_URL}" manifest-repo
+        cd manifest-repo
+
+        # Configure git
+        git config user.name "${GIT_USER_NAME}"
+        git config user.email "${GIT_USER_EMAIL}"
+
+        # Update kustomization.yaml
+        echo "=== Updating Kustomization ==="
+        cd "${OVERLAY_PATH}"
+
+        if [ -n "${NEW_DIGEST}" ]; then
+          /tmp/kustomize edit set image "${IMAGE_NAME}=${IMAGE_NAME}@${NEW_DIGEST}"
+          echo "Updated ${IMAGE_NAME} to digest ${NEW_DIGEST}"
+        else
+          /tmp/kustomize edit set image "${IMAGE_NAME}=${IMAGE_NAME}:${NEW_TAG}"
+          echo "Updated ${IMAGE_NAME} to tag ${NEW_TAG}"
+        fi
+
+        # Show changes
+        echo ""
+        echo "=== Changes ==="
+        git diff
+
+        # Commit and push
+        cd "${WORKSPACE_SOURCE_PATH}/manifest-repo"
+        git add .
+
+        git commit -m "chore(deploy): update ${IMAGE_NAME} to ${NEW_TAG:-${NEW_DIGEST}}
+
+        Automated update by Tekton Pipeline
+
+        Image: ${IMAGE_NAME}
+        Tag: ${NEW_TAG}
+        Digest: ${NEW_DIGEST}" || {
+          echo "No changes to commit"
+          printf "no-change" > /tekton/results/commit-sha
+          exit 0
+        }
+
+        echo ""
+        echo "=== Pushing Changes ==="
+        git push origin "${GIT_BRANCH}"
+
+        # Write commit SHA
+        COMMIT_SHA=$(git rev-parse HEAD)
+        printf "%s" "${COMMIT_SHA}" > /tekton/results/commit-sha
+
+        echo ""
+        echo "=== Update Complete ==="
+        echo "Commit: ${COMMIT_SHA}"
+        echo "ArgoCD will detect and sync this change automatically"

@@ -1,0 +1,169 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: git-clone
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+spec:
+  description: |
+    Clone a git repository to the workspace.
+    Supports authentication via SSH key or token.
+  params:
+    - name: url
+      type: string
+      description: Git repository URL
+    - name: revision
+      type: string
+      description: Git revision to checkout (branch, tag, or commit SHA)
+      default: main
+    - name: subdirectory
+      type: string
+      description: Subdirectory to clone into
+      default: ""
+    - name: depth
+      type: string
+      description: Depth of git clone (0 for full history)
+      default: "1"
+    - name: sslVerify
+      type: string
+      description: Verify SSL certificates
+      default: "true"
+  workspaces:
+    - name: output
+      description: Workspace to clone the repository into
+    - name: ssh-credentials
+      description: SSH credentials for private repos
+      optional: true
+    - name: basic-auth
+      description: Basic auth credentials (username/token)
+      optional: true
+  results:
+    - name: commit
+      description: The precise commit SHA that was cloned
+    - name: url
+      description: The repository URL that was cloned
+    - name: committer-date
+      description: The committer date of the commit
+  steps:
+    - name: clone
+      image: alpine/git:2.43.0
+      env:
+        - name: HOME
+          value: /tmp
+        - name: PARAM_URL
+          value: $(params.url)
+        - name: PARAM_REVISION
+          value: $(params.revision)
+        - name: PARAM_SUBDIRECTORY
+          value: $(params.subdirectory)
+        - name: PARAM_DEPTH
+          value: $(params.depth)
+        - name: PARAM_SSL_VERIFY
+          value: $(params.sslVerify)
+        - name: WORKSPACE_OUTPUT_PATH
+          value: $(workspaces.output.path)
+        - name: WORKSPACE_SSH_CREDENTIALS_BOUND
+          value: $(workspaces.ssh-credentials.bound)
+        - name: WORKSPACE_SSH_CREDENTIALS_PATH
+          value: $(workspaces.ssh-credentials.path)
+        - name: WORKSPACE_BASIC_AUTH_BOUND
+          value: $(workspaces.basic-auth.bound)
+        - name: WORKSPACE_BASIC_AUTH_PATH
+          value: $(workspaces.basic-auth.path)
+      script: |
+        #!/bin/sh
+        set -eu
+
+        # Configure git safe directory
+        git config --global --add safe.directory "${WORKSPACE_OUTPUT_PATH}"
+
+        # Setup SSH if credentials provided
+        if [ "${WORKSPACE_SSH_CREDENTIALS_BOUND}" = "true" ]; then
+          mkdir -p ~/.ssh
+          cp "${WORKSPACE_SSH_CREDENTIALS_PATH}/id_rsa" ~/.ssh/id_rsa 2>/dev/null || true
+          cp "${WORKSPACE_SSH_CREDENTIALS_PATH}/known_hosts" ~/.ssh/known_hosts 2>/dev/null || true
+          chmod 600 ~/.ssh/id_rsa 2>/dev/null || true
+        fi
+
+        # Setup basic auth if credentials provided
+        if [ "${WORKSPACE_BASIC_AUTH_BOUND}" = "true" ]; then
+          # Check for pre-configured files
+          if [ -f "${WORKSPACE_BASIC_AUTH_PATH}/.gitconfig" ]; then
+            cp "${WORKSPACE_BASIC_AUTH_PATH}/.gitconfig" ~/.gitconfig
+          fi
+          if [ -f "${WORKSPACE_BASIC_AUTH_PATH}/.git-credentials" ]; then
+            cp "${WORKSPACE_BASIC_AUTH_PATH}/.git-credentials" ~/.git-credentials
+          fi
+
+          # Check for username/password (Tekton basic-auth secret format)
+          if [ -f "${WORKSPACE_BASIC_AUTH_PATH}/username" ] && [ -f "${WORKSPACE_BASIC_AUTH_PATH}/password" ]; then
+            GIT_USERNAME=$(cat "${WORKSPACE_BASIC_AUTH_PATH}/username")
+            GIT_PASSWORD=$(cat "${WORKSPACE_BASIC_AUTH_PATH}/password")
+
+            # Configure git credential store
+            git config --global credential.helper store
+
+            # Create .git-credentials file
+            # Extract host from URL
+            GIT_HOST=$(echo "${PARAM_URL}" | sed -E 's|https?://([^/]+).*|\1|')
+            echo "https://${GIT_USERNAME}:${GIT_PASSWORD}@${GIT_HOST}" > ~/.git-credentials
+            chmod 600 ~/.git-credentials
+
+            echo "Configured git credentials for ${GIT_HOST}"
+          fi
+        fi
+
+        # SSL verification
+        if [ "${PARAM_SSL_VERIFY}" = "false" ]; then
+          git config --global http.sslVerify false
+        fi
+
+        # Determine clone directory
+        CHECKOUT_DIR="${WORKSPACE_OUTPUT_PATH}"
+        if [ -n "${PARAM_SUBDIRECTORY}" ]; then
+          CHECKOUT_DIR="${WORKSPACE_OUTPUT_PATH}/${PARAM_SUBDIRECTORY}"
+          mkdir -p "${CHECKOUT_DIR}"
+        fi
+
+        # Clean existing content
+        rm -rf "${CHECKOUT_DIR}"/* 2>/dev/null || true
+        rm -rf "${CHECKOUT_DIR}"/.[!.]* 2>/dev/null || true
+
+        # Clone repository
+        echo "Cloning ${PARAM_URL} @ ${PARAM_REVISION}"
+
+        # Check if revision looks like a commit SHA (40 hex chars) or short SHA (7+ hex chars)
+        IS_SHA=$(echo "${PARAM_REVISION}" | grep -E '^[0-9a-f]{7,40}$' || true)
+
+        if [ -n "${IS_SHA}" ]; then
+          # For commit SHAs, clone without --branch and then checkout
+          echo "Detected commit SHA, cloning default branch first..."
+
+          # Clone without depth restriction for SHA checkout
+          git clone "${PARAM_URL}" "${CHECKOUT_DIR}"
+          cd "${CHECKOUT_DIR}"
+
+          # Checkout the specific commit
+          git checkout "${PARAM_REVISION}"
+        else
+          # For branches/tags, use --branch
+          CLONE_ARGS=""
+          if [ "${PARAM_DEPTH}" != "0" ]; then
+            CLONE_ARGS="--depth=${PARAM_DEPTH}"
+          fi
+
+          git clone ${CLONE_ARGS} --branch="${PARAM_REVISION}" "${PARAM_URL}" "${CHECKOUT_DIR}"
+          cd "${CHECKOUT_DIR}"
+        fi
+
+        # Get commit info
+        RESULT_SHA="$(git rev-parse HEAD)"
+        RESULT_COMMITTER_DATE="$(git log -1 --format=%ct)"
+
+        # Write results
+        printf "%s" "${RESULT_SHA}" > "$(results.commit.path)"
+        printf "%s" "${PARAM_URL}" > "$(results.url.path)"
+        printf "%s" "${RESULT_COMMITTER_DATE}" > "$(results.committer-date.path)"
+
+        echo "Successfully cloned ${PARAM_URL} @ ${RESULT_SHA}"
