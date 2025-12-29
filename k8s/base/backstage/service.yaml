@@ -62,5 +62,6 @@ spec:
                   number: 80
   tls:
     - hosts:
+        - backstage.local
         - dev.mycolorforge.com
       secretName: backstage-tls

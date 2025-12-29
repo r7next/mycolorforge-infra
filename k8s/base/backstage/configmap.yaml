@@ -7,19 +7,19 @@ data:
   app-config.yaml: |
     app:
       title: ColorForge Developer Portal
-      baseUrl: http://backstage.local
+      baseUrl: https://dev.mycolorforge.com
 
     organization:
       name: ColorForge
 
     backend:
-      baseUrl: http://backstage.local
+      baseUrl: https://dev.mycolorforge.com
       listen:
         port: 7007
       csp:
         connect-src: ["'self'", 'http:', 'https:']
       cors:
-        origin: http://backstage.local
+        origin: https://dev.mycolorforge.com
         methods: [GET, HEAD, PATCH, POST, PUT, DELETE]
         credentials: true
       database:
@@ -54,20 +54,17 @@ data:
         pullRequestBranchName: backstage-integration
       rules:
         - allow: [Component, System, API, Resource, Location, Template, Group, User]
-      locations:
-        # ColorForge services
-        - type: url
-          target: https://github.com/r7next/mycolorforge-service/blob/main/catalog-info.yaml
-          rules:
-            - allow: [Component, API]
-        - type: url
-          target: https://github.com/r7next/mycolorforge-front/blob/main/catalog-info.yaml
-          rules:
-            - allow: [Component]
-        - type: url
-          target: https://github.com/r7next/mycolorforge-infra/blob/master/catalog-info.yaml
-          rules:
-            - allow: [Component, Resource, System]
+      providers:
+        github:
+          colorforgeOrg:
+            organization: 'r7next'
+            catalogPath: '/catalog-info.yaml'
+            filters:
+              repository: 'mycolorforge-.*'
+            schedule:
+              frequency: { minutes: 30 }
+              timeout: { minutes: 3 }
+      locations: []
 
     kubernetes:
       serviceLocatorMethod:
