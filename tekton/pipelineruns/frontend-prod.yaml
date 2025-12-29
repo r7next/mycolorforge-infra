@@ -1,0 +1,62 @@
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: frontend-prod-
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: colorforge
+    environment: production
+spec:
+  pipelineRef:
+    name: colorforge-frontend-pipeline
+  params:
+    - name: git-url
+      value: "https://github.com/r7next/mycolorforge-front.git"
+    - name: git-revision
+      value: "master"
+    - name: image-registry
+      value: "harbor.local"
+    - name: image-repository
+      value: "colorforge/frontend"
+    - name: image-tag
+      value: "latest"
+    - name: skip-tls-verify
+      value: "true"
+    # Production URLs
+    - name: api-url
+      value: "https://api.mycolorforge.com/api/v1"
+    - name: app-url
+      value: "https://mycolorforge.com"
+    # Storage URL - using API as proxy for images (no external MinIO endpoint yet)
+    - name: storage-url
+      value: "https://api.mycolorforge.com/storage"
+    # Observability - enabled in production
+    - name: faro-enabled
+      value: "true"
+    - name: faro-url
+      value: "https://otel.mycolorforge.com"
+    - name: app-name
+      value: "colorforge-frontend"
+    - name: app-version
+      value: "1.0.0"
+    # GitOps - update production overlay
+    - name: overlay-path
+      value: "infra/k8s/overlays/production"
+  workspaces:
+    - name: shared-workspace
+      volumeClaimTemplate:
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 2Gi
+          storageClassName: local-path
+    - name: node-cache
+      emptyDir: {}
+    - name: docker-credentials
+      secret:
+        secretName: harbor-registry-credentials
+    - name: git-credentials
+      secret:
+        secretName: github-credentials

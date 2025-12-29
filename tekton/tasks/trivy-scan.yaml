@@ -1,0 +1,152 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: trivy-scan
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+spec:
+  description: |
+    Scan container images for vulnerabilities using Trivy.
+    Supports multiple output formats and severity filtering.
+    Integrates well with Harbor's built-in scanner.
+  params:
+    - name: image
+      type: string
+      description: Full image URL to scan (with tag or digest)
+    - name: severity
+      type: string
+      description: Severity levels to report (UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL)
+      default: "HIGH,CRITICAL"
+    - name: exit-code
+      type: string
+      description: Exit code when vulnerabilities are found (0 to ignore, 1 to fail)
+      default: "1"
+    - name: ignore-unfixed
+      type: string
+      description: Ignore vulnerabilities without fixes
+      default: "false"
+    - name: format
+      type: string
+      description: Output format (table, json, sarif, template)
+      default: "table"
+    - name: skip-db-update
+      type: string
+      description: Skip database update (use cached)
+      default: "false"
+    - name: timeout
+      type: string
+      description: Scan timeout
+      default: "10m"
+  workspaces:
+    - name: cache
+      description: Trivy cache directory
+      optional: true
+    - name: dockerconfig
+      description: Docker config.json for private registries
+      optional: true
+  results:
+    - name: vulnerabilities-count
+      description: Total number of vulnerabilities found
+    - name: critical-count
+      description: Number of CRITICAL vulnerabilities
+    - name: high-count
+      description: Number of HIGH vulnerabilities
+    - name: scan-status
+      description: Scan status (passed/failed)
+  steps:
+    - name: scan
+      image: docker.io/aquasec/trivy:0.48.3
+      env:
+        - name: TRIVY_CACHE_DIR
+          value: $(workspaces.cache.path)/trivy
+        - name: DOCKER_CONFIG
+          value: $(workspaces.dockerconfig.path)
+      script: |
+        #!/bin/sh
+        set -e
+
+        echo "=== Trivy Security Scan ==="
+        echo "Image: $(params.image)"
+        echo "Severity Filter: $(params.severity)"
+        echo "Exit on Vulnerabilities: $(params.exit-code)"
+        echo "Ignore Unfixed: $(params.ignore-unfixed)"
+        echo ""
+
+        # Create cache directory
+        mkdir -p "${TRIVY_CACHE_DIR}"
+
+        # Build Trivy arguments
+        TRIVY_ARGS="image"
+        TRIVY_ARGS="${TRIVY_ARGS} --severity=$(params.severity)"
+        TRIVY_ARGS="${TRIVY_ARGS} --format=$(params.format)"
+        TRIVY_ARGS="${TRIVY_ARGS} --timeout=$(params.timeout)"
+
+        if [ "$(params.ignore-unfixed)" = "true" ]; then
+          TRIVY_ARGS="${TRIVY_ARGS} --ignore-unfixed"
+        fi
+
+        if [ "$(params.skip-db-update)" = "true" ]; then
+          TRIVY_ARGS="${TRIVY_ARGS} --skip-db-update"
+        fi
+
+        # Also output JSON for parsing
+        echo "=== Running Vulnerability Scan ==="
+
+        # Run scan and capture output
+        set +e
+        trivy ${TRIVY_ARGS} --exit-code=0 "$(params.image)" 2>&1 | tee scan-output.txt
+        SCAN_EXIT=$?
+        set -e
+
+        # Run JSON scan for parsing
+        trivy image --severity=$(params.severity) --format=json --timeout=$(params.timeout) "$(params.image)" > scan-results.json 2>/dev/null || true
+
+        # Parse results
+        if [ -f scan-results.json ]; then
+          TOTAL_VULNS=$(cat scan-results.json | grep -o '"VulnerabilityID"' | wc -l)
+          CRITICAL=$(cat scan-results.json | grep -o '"Severity":"CRITICAL"' | wc -l)
+          HIGH=$(cat scan-results.json | grep -o '"Severity":"HIGH"' | wc -l)
+        else
+          TOTAL_VULNS=0
+          CRITICAL=0
+          HIGH=0
+        fi
+
+        echo ""
+        echo "=== Scan Summary ==="
+        echo "Total Vulnerabilities: ${TOTAL_VULNS}"
+        echo "Critical: ${CRITICAL}"
+        echo "High: ${HIGH}"
+
+        # Write results
+        printf "%s" "${TOTAL_VULNS}" > "$(results.vulnerabilities-count.path)"
+        printf "%s" "${CRITICAL}" > "$(results.critical-count.path)"
+        printf "%s" "${HIGH}" > "$(results.high-count.path)"
+
+        # Determine pass/fail based on exit-code parameter
+        if [ "$(params.exit-code)" = "1" ]; then
+          # Re-run with exit code to fail on vulnerabilities
+          set +e
+          trivy image --severity=$(params.severity) --exit-code=1 --quiet "$(params.image)" > /dev/null 2>&1
+          CHECK_EXIT=$?
+          set -e
+
+          if [ ${CHECK_EXIT} -ne 0 ]; then
+            echo ""
+            echo "FAILED: Vulnerabilities found matching severity filter"
+            printf "failed" > "$(results.scan-status.path)"
+            exit 1
+          fi
+        fi
+
+        echo ""
+        echo "=== Scan Passed ==="
+        printf "passed" > "$(results.scan-status.path)"
+      computeResources:
+        requests:
+          memory: "256Mi"
+          cpu: "100m"
+        limits:
+          memory: "1Gi"
+          cpu: "500m"

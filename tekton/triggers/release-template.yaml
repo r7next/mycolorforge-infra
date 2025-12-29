@@ -1,0 +1,166 @@
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: mycolorforge-release-template
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+  annotations:
+    description: |
+      Template for release builds triggered by version tags (v*).
+      Builds with semantic version tags and deploys to production.
+spec:
+  params:
+    - name: git-revision
+      description: The tag ref (refs/tags/v1.0.0)
+    - name: git-url
+      description: The git repository URL
+    - name: git-ref
+      description: The git ref
+    - name: version
+      description: The extracted version (v1.0.0)
+
+  resourcetemplates:
+    # API Release
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        generateName: mycolorforge-api-release-
+        namespace: tekton-pipelines
+        labels:
+          app.kubernetes.io/part-of: mycolorforge
+          app.kubernetes.io/version: $(tt.params.version)
+          tekton.dev/pipeline: mycolorforge-api-pipeline
+          triggers.tekton.dev/trigger: github-release
+      spec:
+        pipelineRef:
+          name: mycolorforge-api-pipeline
+        params:
+          - name: git-url
+            value: $(tt.params.git-url)
+          - name: git-revision
+            value: $(tt.params.git-revision)
+          - name: image-registry
+            value: harbor.example.com
+          - name: image-repository
+            value: mycolorforge/api
+          # Use semantic version as image tag
+          - name: image-tag
+            value: $(tt.params.version)
+          - name: overlay-path
+            value: mycolorforge-service/infra/k8s/overlays/prod
+        workspaces:
+          - name: shared-workspace
+            volumeClaimTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 2Gi
+                storageClassName: standard
+          - name: go-cache
+            persistentVolumeClaim:
+              claimName: go-cache-pvc
+          - name: docker-credentials
+            secret:
+              secretName: harbor-credentials
+          - name: git-credentials
+            secret:
+              secretName: git-credentials
+        taskRunTemplate:
+          serviceAccountName: tekton-pipeline-sa
+        timeouts:
+          pipeline: "1h0m0s"
+
+    # Frontend Release
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        generateName: mycolorforge-frontend-release-
+        namespace: tekton-pipelines
+        labels:
+          app.kubernetes.io/part-of: mycolorforge
+          app.kubernetes.io/version: $(tt.params.version)
+          tekton.dev/pipeline: mycolorforge-frontend-pipeline
+          triggers.tekton.dev/trigger: github-release
+      spec:
+        pipelineRef:
+          name: mycolorforge-frontend-pipeline
+        params:
+          - name: git-url
+            value: $(tt.params.git-url)
+          - name: git-revision
+            value: $(tt.params.git-revision)
+          - name: image-registry
+            value: harbor.example.com
+          - name: image-repository
+            value: mycolorforge/frontend
+          - name: image-tag
+            value: $(tt.params.version)
+          - name: overlay-path
+            value: mycolorforge-service/infra/k8s/overlays/prod
+        workspaces:
+          - name: shared-workspace
+            volumeClaimTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 4Gi
+                storageClassName: standard
+          - name: node-cache
+            persistentVolumeClaim:
+              claimName: node-cache-pvc
+          - name: docker-credentials
+            secret:
+              secretName: harbor-credentials
+          - name: git-credentials
+            secret:
+              secretName: git-credentials
+        taskRunTemplate:
+          serviceAccountName: tekton-pipeline-sa
+        timeouts:
+          pipeline: "1h0m0s"
+
+    # Database Migration for releases
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        generateName: mycolorforge-migration-release-
+        namespace: tekton-pipelines
+        labels:
+          app.kubernetes.io/part-of: mycolorforge
+          app.kubernetes.io/version: $(tt.params.version)
+          tekton.dev/pipeline: mycolorforge-migration-pipeline
+          triggers.tekton.dev/trigger: github-release
+      spec:
+        pipelineRef:
+          name: mycolorforge-migration-pipeline
+        params:
+          - name: git-url
+            value: $(tt.params.git-url)
+          - name: git-revision
+            value: $(tt.params.git-revision)
+          - name: dry-run
+            value: "false"
+        workspaces:
+          - name: shared-workspace
+            volumeClaimTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 1Gi
+          - name: db-credentials
+            secret:
+              secretName: postgres-credentials
+          - name: git-credentials
+            secret:
+              secretName: git-credentials
+        taskRunTemplate:
+          serviceAccountName: tekton-pipeline-sa
+        timeouts:
+          pipeline: "30m0s"

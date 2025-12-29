@@ -1,0 +1,72 @@
+# =============================================================================
+# PVCs para cache persistente do pipeline CI/CD
+# Reduz tempo de build ao reutilizar dependências entre execuções
+# =============================================================================
+---
+# Cache para Go modules e build cache
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: colorforge-go-cache
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: colorforge
+    app.kubernetes.io/component: cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: local-path
+---
+# Cache para npm/node_modules
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: colorforge-npm-cache
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: colorforge
+    app.kubernetes.io/component: cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: local-path
+---
+# Cache para Trivy vulnerability database
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: colorforge-trivy-cache
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: colorforge
+    app.kubernetes.io/component: cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 500Mi
+  storageClassName: local-path
+---
+# Workspace compartilhado para evitar criação de PVC a cada execução
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: colorforge-workspace
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: colorforge
+    app.kubernetes.io/component: workspace
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: local-path

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mycolorforge
+  labels:
+    app.kubernetes.io/name: mycolorforge
+    app.kubernetes.io/managed-by: kubectl

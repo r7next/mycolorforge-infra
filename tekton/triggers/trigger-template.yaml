@@ -1,0 +1,276 @@
+---
+# =============================================================================
+# TriggerTemplate for Backend (Go API) builds - OTIMIZADO
+# =============================================================================
+# Mudanças:
+# - go-cache usa PVC persistente (não emptyDir)
+# - trivy-cache usa PVC persistente
+# - Timeout reduzido (pipeline mais rápido agora)
+# =============================================================================
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: colorforge-backend-template
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: colorforge
+spec:
+  params:
+    - name: git-repo-url
+      description: The git repository URL
+    - name: git-repo-name
+      description: Repository name
+    - name: git-revision
+      description: The git revision (commit SHA)
+    - name: git-short-sha
+      description: Short commit SHA (7 chars)
+    - name: git-branch
+      description: Branch name
+    - name: pusher-name
+      description: Name of the person who pushed
+
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        generateName: colorforge-backend-
+        namespace: tekton-pipelines
+        labels:
+          app.kubernetes.io/part-of: colorforge
+          app.kubernetes.io/component: backend
+          tekton.dev/pipeline: colorforge-backend-pipeline
+          triggers.tekton.dev/trigger: github-push
+        annotations:
+          tekton.dev/git-commit: $(tt.params.git-revision)
+          tekton.dev/git-branch: $(tt.params.git-branch)
+          tekton.dev/pusher: $(tt.params.pusher-name)
+      spec:
+        pipelineRef:
+          name: colorforge-backend-pipeline
+        params:
+          - name: git-url
+            value: $(tt.params.git-repo-url)
+          - name: git-revision
+            value: $(tt.params.git-revision)
+          - name: image-registry
+            value: harbor.local
+          - name: image-repository
+            value: colorforge/backend
+          - name: image-tag
+            value: $(tt.params.git-short-sha)
+          - name: skip-tls-verify
+            value: "true"
+        workspaces:
+          # Workspace compartilhado - ainda usa volumeClaimTemplate para isolamento
+          - name: shared-workspace
+            volumeClaimTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 2Gi
+                storageClassName: local-path
+          # Go cache - PVC PERSISTENTE para reutilizar entre builds
+          - name: go-cache
+            persistentVolumeClaim:
+              claimName: colorforge-go-cache
+          # Trivy cache - PVC PERSISTENTE para não baixar DB toda vez
+          - name: trivy-cache
+            persistentVolumeClaim:
+              claimName: colorforge-trivy-cache
+          - name: docker-credentials
+            secret:
+              secretName: harbor-registry-credentials
+          - name: git-credentials
+            secret:
+              secretName: github-credentials
+        taskRunTemplate:
+          serviceAccountName: tekton-pipeline-sa
+        timeouts:
+          pipeline: "30m0s"   # Reduzido de 1h (pipeline otimizado)
+          tasks: "15m0s"      # Reduzido de 30m
+---
+# =============================================================================
+# TriggerTemplate for Frontend (Next.js) builds - OTIMIZADO
+# =============================================================================
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: colorforge-frontend-template
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: colorforge
+spec:
+  params:
+    - name: git-repo-url
+      description: The git repository URL
+    - name: git-repo-name
+      description: Repository name
+    - name: git-revision
+      description: The git revision (commit SHA)
+    - name: git-short-sha
+      description: Short commit SHA (7 chars)
+    - name: git-branch
+      description: Branch name
+    - name: pusher-name
+      description: Name of the person who pushed
+
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        generateName: colorforge-frontend-
+        namespace: tekton-pipelines
+        labels:
+          app.kubernetes.io/part-of: colorforge
+          app.kubernetes.io/component: frontend
+          tekton.dev/pipeline: colorforge-frontend-pipeline
+          triggers.tekton.dev/trigger: github-push
+        annotations:
+          tekton.dev/git-commit: $(tt.params.git-revision)
+          tekton.dev/git-branch: $(tt.params.git-branch)
+          tekton.dev/pusher: $(tt.params.pusher-name)
+      spec:
+        pipelineRef:
+          name: colorforge-frontend-pipeline
+        params:
+          - name: git-url
+            value: $(tt.params.git-repo-url)
+          - name: git-revision
+            value: $(tt.params.git-revision)
+          - name: image-registry
+            value: harbor.local
+          - name: image-repository
+            value: colorforge/frontend
+          - name: image-tag
+            value: $(tt.params.git-short-sha)
+          - name: skip-tls-verify
+            value: "true"
+          # Production URLs embedded at build time
+          - name: api-url
+            value: "https://api.mycolorforge.com/api/v1"
+          - name: app-url
+            value: "https://mycolorforge.com"
+          - name: storage-url
+            value: "https://api.mycolorforge.com/storage"
+          # Observability - enabled in production
+          - name: faro-enabled
+            value: "true"
+          - name: faro-url
+            value: "https://otel.mycolorforge.com"
+          - name: app-name
+            value: "colorforge-frontend"
+          - name: app-version
+            value: $(tt.params.git-short-sha)
+        workspaces:
+          - name: shared-workspace
+            volumeClaimTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 4Gi
+                storageClassName: local-path
+          # Node cache - PVC PERSISTENTE para reutilizar node_modules
+          - name: node-cache
+            persistentVolumeClaim:
+              claimName: colorforge-npm-cache
+          # Trivy cache compartilhado
+          - name: trivy-cache
+            persistentVolumeClaim:
+              claimName: colorforge-trivy-cache
+          - name: docker-credentials
+            secret:
+              secretName: harbor-registry-credentials
+          - name: git-credentials
+            secret:
+              secretName: github-credentials
+        taskRunTemplate:
+          serviceAccountName: tekton-pipeline-sa
+        timeouts:
+          pipeline: "30m0s"   # Reduzido
+          tasks: "15m0s"
+---
+# =============================================================================
+# TriggerTemplate for Release builds (tagged versions) - OTIMIZADO
+# =============================================================================
+apiVersion: triggers.tekton.dev/v1beta1
+kind: TriggerTemplate
+metadata:
+  name: colorforge-release-template
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: colorforge
+spec:
+  params:
+    - name: git-repo-url
+      description: The git repository URL
+    - name: git-repo-name
+      description: Repository name
+    - name: git-revision
+      description: The git revision (commit SHA)
+    - name: git-tag
+      description: Git tag (e.g., v1.0.0)
+    - name: pusher-name
+      description: Name of the person who pushed
+
+  resourcetemplates:
+    # Backend release build
+    - apiVersion: tekton.dev/v1
+      kind: PipelineRun
+      metadata:
+        generateName: colorforge-backend-release-
+        namespace: tekton-pipelines
+        labels:
+          app.kubernetes.io/part-of: colorforge
+          app.kubernetes.io/component: backend
+          tekton.dev/pipeline: colorforge-backend-pipeline
+          triggers.tekton.dev/trigger: github-release
+        annotations:
+          tekton.dev/git-tag: $(tt.params.git-tag)
+          tekton.dev/pusher: $(tt.params.pusher-name)
+      spec:
+        pipelineRef:
+          name: colorforge-backend-pipeline
+        params:
+          - name: git-url
+            value: $(tt.params.git-repo-url)
+          - name: git-revision
+            value: $(tt.params.git-tag)
+          - name: image-registry
+            value: harbor.local
+          - name: image-repository
+            value: colorforge/backend
+          - name: image-tag
+            value: $(tt.params.git-tag)
+          - name: skip-tls-verify
+            value: "true"
+        workspaces:
+          - name: shared-workspace
+            volumeClaimTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce
+                resources:
+                  requests:
+                    storage: 2Gi
+                storageClassName: local-path
+          - name: go-cache
+            persistentVolumeClaim:
+              claimName: colorforge-go-cache
+          - name: trivy-cache
+            persistentVolumeClaim:
+              claimName: colorforge-trivy-cache
+          - name: docker-credentials
+            secret:
+              secretName: harbor-registry-credentials
+          - name: git-credentials
+            secret:
+              secretName: github-credentials
+        taskRunTemplate:
+          serviceAccountName: tekton-pipeline-sa
+        timeouts:
+          pipeline: "30m0s"
+          tasks: "15m0s"

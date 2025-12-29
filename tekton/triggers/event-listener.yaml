@@ -1,0 +1,169 @@
+apiVersion: triggers.tekton.dev/v1beta1
+kind: EventListener
+metadata:
+  name: colorforge-listener
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: colorforge
+spec:
+  serviceAccountName: tekton-triggers-sa
+  triggers:
+    # Trigger for Backend (mycolorforge-service) - push to main
+    # Processa apenas o último commit de cada push para evitar builds duplicados
+    - name: backend-push-main
+      interceptors:
+        - name: github-filter
+          ref:
+            name: github
+            kind: ClusterInterceptor
+          params:
+            - name: secretRef
+              value:
+                secretName: github-webhook-secret
+                secretKey: secret
+            - name: eventTypes
+              value: ["push"]
+        - name: cel-filter
+          ref:
+            name: cel
+            kind: ClusterInterceptor
+          params:
+            - name: filter
+              # Filtra: branch main, repo correto, e ignora eventos de delete (after = 0000...)
+              value: >-
+                body.ref == 'refs/heads/main' &&
+                body.repository.name == 'mycolorforge-service' &&
+                body.after != '0000000000000000000000000000000000000000' &&
+                !body.deleted
+            - name: overlays
+              value:
+                - key: repo_name
+                  expression: "body.repository.name"
+                - key: repo_url
+                  expression: "body.repository.clone_url"
+                - key: commit_sha
+                  expression: "body.after"
+                - key: short_sha
+                  expression: "body.after.substring(0, 7)"
+                - key: branch
+                  expression: "body.ref.replace('refs/heads/', '')"
+                - key: pusher_name
+                  expression: "body.pusher.name"
+      bindings:
+        - ref: github-push-binding
+      template:
+        ref: colorforge-backend-template
+
+    # Trigger for Frontend (mycolorforge-front) - push to master
+    - name: frontend-push-main
+      interceptors:
+        - name: github-filter
+          ref:
+            name: github
+            kind: ClusterInterceptor
+          params:
+            - name: secretRef
+              value:
+                secretName: github-webhook-secret
+                secretKey: secret
+            - name: eventTypes
+              value: ["push"]
+        - name: cel-filter
+          ref:
+            name: cel
+            kind: ClusterInterceptor
+          params:
+            - name: filter
+              value: >-
+                (body.ref == 'refs/heads/main' || body.ref == 'refs/heads/master') &&
+                body.repository.name == 'mycolorforge-front'
+            - name: overlays
+              value:
+                - key: repo_name
+                  expression: "body.repository.name"
+                - key: repo_url
+                  expression: "body.repository.clone_url"
+                - key: commit_sha
+                  expression: "body.after"
+                - key: short_sha
+                  expression: "body.after.substring(0, 7)"
+                - key: branch
+                  expression: "body.ref.replace('refs/heads/', '')"
+                - key: pusher_name
+                  expression: "body.pusher.name"
+      bindings:
+        - ref: github-push-binding
+      template:
+        ref: colorforge-frontend-template
+
+    # Trigger for release tags (v*)
+    - name: release-tag
+      interceptors:
+        - name: github-filter
+          ref:
+            name: github
+            kind: ClusterInterceptor
+          params:
+            - name: secretRef
+              value:
+                secretName: github-webhook-secret
+                secretKey: secret
+            - name: eventTypes
+              value: ["push"]
+        - name: cel-filter
+          ref:
+            name: cel
+            kind: ClusterInterceptor
+          params:
+            - name: filter
+              value: >-
+                body.ref.startsWith('refs/tags/v')
+            - name: overlays
+              value:
+                - key: repo_name
+                  expression: "body.repository.name"
+                - key: repo_url
+                  expression: "body.repository.clone_url"
+                - key: version
+                  expression: "body.ref.replace('refs/tags/', '')"
+                - key: commit_sha
+                  expression: "body.after"
+                - key: pusher_name
+                  expression: "body.pusher.name"
+      bindings:
+        - ref: github-tag-binding
+      template:
+        ref: colorforge-release-template
+
+  resources:
+    kubernetesResource:
+      spec:
+        template:
+          spec:
+            serviceAccountName: tekton-triggers-sa
+            containers:
+              - resources:
+                  requests:
+                    memory: "64Mi"
+                    cpu: "50m"
+                  limits:
+                    memory: "256Mi"
+                    cpu: "200m"
+---
+# Service to expose the EventListener
+apiVersion: v1
+kind: Service
+metadata:
+  name: el-colorforge-listener
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: colorforge
+spec:
+  type: ClusterIP
+  ports:
+    - name: http-listener
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    eventlistener: colorforge-listener

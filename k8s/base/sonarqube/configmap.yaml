@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sonarqube-config
+  namespace: sonarqube
+  labels:
+    app.kubernetes.io/name: sonarqube
+data:
+  # SonarQube configuration
+  SONAR_JDBC_URL: "jdbc:postgresql://sonarqube-postgres:5432/sonarqube"
+  SONAR_JDBC_USERNAME: "sonarqube"
+  SONAR_WEB_CONTEXT: "/"
+  SONAR_WEB_PORT: "9000"
+  # JVM options for better performance
+  SONAR_WEB_JAVAOPTS: "-Xmx512m -Xms256m"
+  SONAR_CE_JAVAOPTS: "-Xmx512m -Xms256m"
+  SONAR_SEARCH_JAVAOPTS: "-Xmx512m -Xms256m"

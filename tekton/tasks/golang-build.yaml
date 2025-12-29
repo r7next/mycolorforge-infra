@@ -1,0 +1,119 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: golang-build
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+spec:
+  description: |
+    Build a Go application with configurable options.
+    Produces a static binary suitable for containerization.
+  params:
+    - name: package
+      type: string
+      description: Go package to build (e.g., ./cmd/server)
+      default: "./..."
+    - name: output
+      type: string
+      description: Output binary path
+      default: "bin/server"
+    - name: go-version
+      type: string
+      description: Go version to use
+      default: "1.23"
+    - name: goos
+      type: string
+      description: Target operating system
+      default: "linux"
+    - name: goarch
+      type: string
+      description: Target architecture
+      default: "amd64"
+    - name: cgo-enabled
+      type: string
+      description: Enable CGO
+      default: "0"
+    - name: ldflags
+      type: string
+      description: Linker flags
+      default: "-s -w"
+    - name: context
+      type: string
+      description: Subdirectory containing Go code
+      default: "."
+  workspaces:
+    - name: source
+      description: Workspace containing the Go source code
+    - name: cache
+      description: Go module cache
+      optional: true
+  results:
+    - name: binary-path
+      description: Path to the built binary
+    - name: binary-size
+      description: Size of the built binary in bytes
+  steps:
+    - name: build
+      image: docker.io/library/golang:$(params.go-version)-alpine
+      workingDir: $(workspaces.source.path)/$(params.context)
+      env:
+        - name: GOOS
+          value: $(params.goos)
+        - name: GOARCH
+          value: $(params.goarch)
+        - name: CGO_ENABLED
+          value: $(params.cgo-enabled)
+        - name: GOMODCACHE
+          value: $(workspaces.cache.path)/mod
+        - name: GOCACHE
+          value: $(workspaces.cache.path)/build
+      script: |
+        #!/bin/sh
+        set -eu
+
+        echo "=== Go Build Configuration ==="
+        echo "Package: $(params.package)"
+        echo "Output: $(params.output)"
+        echo "GOOS: ${GOOS}"
+        echo "GOARCH: ${GOARCH}"
+        echo "CGO_ENABLED: ${CGO_ENABLED}"
+        echo "Go Version: $(go version)"
+        echo ""
+
+        # Create output directory
+        mkdir -p "$(dirname $(params.output))"
+
+        # Download dependencies
+        echo "=== Downloading dependencies ==="
+        go mod download
+
+        # Build
+        echo "=== Building ==="
+        go build \
+          -ldflags="$(params.ldflags)" \
+          -o "$(params.output)" \
+          "$(params.package)"
+
+        # Verify binary
+        if [ -f "$(params.output)" ]; then
+          BINARY_SIZE=$(stat -c%s "$(params.output)" 2>/dev/null || stat -f%z "$(params.output)")
+          echo ""
+          echo "=== Build Successful ==="
+          echo "Binary: $(params.output)"
+          echo "Size: ${BINARY_SIZE} bytes ($(echo "scale=2; ${BINARY_SIZE}/1048576" | bc)MB)"
+
+          # Write results
+          printf "%s" "$(params.output)" > "$(results.binary-path.path)"
+          printf "%s" "${BINARY_SIZE}" > "$(results.binary-size.path)"
+        else
+          echo "ERROR: Binary not found at $(params.output)"
+          exit 1
+        fi
+      computeResources:
+        requests:
+          memory: "512Mi"
+          cpu: "500m"
+        limits:
+          memory: "2Gi"
+          cpu: "2000m"

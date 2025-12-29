@@ -1,0 +1,153 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: golang-test
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+spec:
+  description: |
+    Run Go tests with coverage and optional race detection.
+    Outputs test results and coverage reports.
+  params:
+    - name: packages
+      type: string
+      description: Go packages to test
+      default: "./..."
+    - name: go-version
+      type: string
+      description: Go version to use
+      default: "1.23"
+    - name: context
+      type: string
+      description: Subdirectory containing Go code
+      default: "."
+    - name: coverage-threshold
+      type: string
+      description: Minimum coverage percentage required (0 to disable)
+      default: "0"
+    - name: race-detection
+      type: string
+      description: Enable race detection
+      default: "false"
+    - name: timeout
+      type: string
+      description: Test timeout
+      default: "10m"
+    - name: verbose
+      type: string
+      description: Verbose output
+      default: "true"
+  workspaces:
+    - name: source
+      description: Workspace containing the Go source code
+    - name: cache
+      description: Go module cache
+      optional: true
+  results:
+    - name: coverage
+      description: Test coverage percentage
+    - name: passed
+      description: Number of tests passed
+    - name: failed
+      description: Number of tests failed
+  steps:
+    - name: test
+      image: docker.io/library/golang:$(params.go-version)-alpine
+      workingDir: $(workspaces.source.path)/$(params.context)
+      env:
+        - name: CGO_ENABLED
+          value: "0"
+        - name: GOMODCACHE
+          value: $(workspaces.cache.path)/mod
+        - name: GOCACHE
+          value: $(workspaces.cache.path)/build
+      script: |
+        #!/bin/sh
+        set -e
+
+        echo "=== Go Test Configuration ==="
+        echo "Packages: $(params.packages)"
+        echo "Coverage Threshold: $(params.coverage-threshold)%"
+        echo "Race Detection: $(params.race-detection)"
+        echo "Timeout: $(params.timeout)"
+        echo "Go Version: $(go version)"
+        echo ""
+
+        # Download dependencies
+        echo "=== Downloading dependencies ==="
+        go mod download
+
+        # Build test flags
+        TEST_FLAGS="-timeout=$(params.timeout)"
+
+        if [ "$(params.verbose)" = "true" ]; then
+          TEST_FLAGS="${TEST_FLAGS} -v"
+        fi
+
+        if [ "$(params.race-detection)" = "true" ]; then
+          # Race detection requires CGO
+          export CGO_ENABLED=1
+          apk add --no-cache gcc musl-dev
+          TEST_FLAGS="${TEST_FLAGS} -race"
+        fi
+
+        # Run tests with coverage
+        echo "=== Running Tests ==="
+        COVERAGE_FILE="coverage.out"
+
+        # Use set +e to continue even if tests fail
+        set +e
+        go test ${TEST_FLAGS} -coverprofile="${COVERAGE_FILE}" $(params.packages) 2>&1 | tee test-output.txt
+        TEST_EXIT_CODE=$?
+        set -e
+
+        # Parse test results
+        PASSED=$(grep -c "^--- PASS:" test-output.txt 2>/dev/null || echo "0")
+        FAILED=$(grep -c "^--- FAIL:" test-output.txt 2>/dev/null || echo "0")
+
+        echo ""
+        echo "=== Test Results ==="
+        echo "Passed: ${PASSED}"
+        echo "Failed: ${FAILED}"
+
+        # Write results
+        printf "%s" "${PASSED}" > "$(results.passed.path)"
+        printf "%s" "${FAILED}" > "$(results.failed.path)"
+
+        # Calculate coverage
+        COVERAGE="0"
+        if [ -f "${COVERAGE_FILE}" ]; then
+          COVERAGE=$(go tool cover -func="${COVERAGE_FILE}" | grep "total:" | awk '{print $3}' | sed 's/%//')
+          echo "Coverage: ${COVERAGE}%"
+        fi
+        printf "%s" "${COVERAGE}" > "$(results.coverage.path)"
+
+        # Check coverage threshold
+        THRESHOLD=$(params.coverage-threshold)
+        if [ "${THRESHOLD}" != "0" ]; then
+          COVERAGE_INT=$(echo "${COVERAGE}" | cut -d'.' -f1)
+          THRESHOLD_INT=$(echo "${THRESHOLD}" | cut -d'.' -f1)
+          if [ "${COVERAGE_INT}" -lt "${THRESHOLD_INT}" ]; then
+            echo ""
+            echo "ERROR: Coverage ${COVERAGE}% is below threshold ${THRESHOLD}%"
+            exit 1
+          fi
+        fi
+
+        # Fail if tests failed
+        if [ ${TEST_EXIT_CODE} -ne 0 ]; then
+          echo ""
+          echo "ERROR: Tests failed with exit code ${TEST_EXIT_CODE}"
+          exit ${TEST_EXIT_CODE}
+        fi
+
+        echo ""
+        echo "=== All Tests Passed ==="
+      computeResources:
+        requests:
+          memory: "1Gi"
+          cpu: "1000m"
+        limits:
+          memory: "2Gi"
+          cpu: "2000m"

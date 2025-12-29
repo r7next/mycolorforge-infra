@@ -1,0 +1,239 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: mycolorforge-migration-pipeline
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+    app.kubernetes.io/component: database
+spec:
+  description: |
+    Database migration pipeline using Flyway.
+    Runs migrations against the target database.
+    Should be triggered manually or as part of release process.
+  params:
+    - name: git-url
+      type: string
+      description: Git repository URL
+      default: https://github.com/your-org/mycolorforge.git
+    - name: git-revision
+      type: string
+      description: Git revision containing migrations
+      default: main
+    - name: flyway-version
+      type: string
+      description: Flyway version to use
+      default: "10.8.1"
+    - name: database-url
+      type: string
+      description: Database JDBC URL
+      default: "jdbc:postgresql://postgres:5432/mycolorforge"
+    - name: dry-run
+      type: string
+      description: If true, only validate migrations without applying
+      default: "false"
+
+  workspaces:
+    - name: shared-workspace
+      description: Workspace containing migration files
+    - name: git-credentials
+      description: Git credentials
+      optional: true
+    - name: db-credentials
+      description: Database credentials (username and password files)
+
+  tasks:
+    - name: clone
+      taskRef:
+        name: git-clone
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+        - name: basic-auth
+          workspace: git-credentials
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+
+    - name: validate-migrations
+      runAfter:
+        - clone
+      taskSpec:
+        params:
+          - name: flyway-version
+            type: string
+          - name: database-url
+            type: string
+        workspaces:
+          - name: source
+          - name: db-credentials
+        steps:
+          - name: validate
+            image: flyway/flyway:$(params.flyway-version)
+            workingDir: $(workspaces.source.path)
+            env:
+              - name: FLYWAY_URL
+                value: $(params.database-url)
+              - name: FLYWAY_USER
+                valueFrom:
+                  secretKeyRef:
+                    name: postgres-credentials
+                    key: username
+              - name: FLYWAY_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: postgres-credentials
+                    key: password
+            script: |
+              #!/bin/sh
+              set -eu
+
+              echo "=== Validating Flyway Migrations ==="
+
+              MIGRATION_DIR="compose/mycolorforge-flyway/migrations"
+
+              if [ ! -d "${MIGRATION_DIR}" ]; then
+                echo "ERROR: Migration directory not found: ${MIGRATION_DIR}"
+                exit 1
+              fi
+
+              echo "Migration files found:"
+              ls -la "${MIGRATION_DIR}"
+
+              flyway \
+                -locations="filesystem:${MIGRATION_DIR}" \
+                validate
+
+              echo ""
+              echo "=== Validation Successful ==="
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+        - name: db-credentials
+          workspace: db-credentials
+      params:
+        - name: flyway-version
+          value: $(params.flyway-version)
+        - name: database-url
+          value: $(params.database-url)
+
+    - name: show-pending
+      runAfter:
+        - validate-migrations
+      taskSpec:
+        params:
+          - name: flyway-version
+            type: string
+          - name: database-url
+            type: string
+        workspaces:
+          - name: source
+          - name: db-credentials
+        steps:
+          - name: info
+            image: flyway/flyway:$(params.flyway-version)
+            workingDir: $(workspaces.source.path)
+            env:
+              - name: FLYWAY_URL
+                value: $(params.database-url)
+              - name: FLYWAY_USER
+                valueFrom:
+                  secretKeyRef:
+                    name: postgres-credentials
+                    key: username
+              - name: FLYWAY_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: postgres-credentials
+                    key: password
+            script: |
+              #!/bin/sh
+              set -eu
+
+              echo "=== Migration Status ==="
+
+              MIGRATION_DIR="compose/mycolorforge-flyway/migrations"
+
+              flyway \
+                -locations="filesystem:${MIGRATION_DIR}" \
+                info
+
+              echo ""
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+        - name: db-credentials
+          workspace: db-credentials
+      params:
+        - name: flyway-version
+          value: $(params.flyway-version)
+        - name: database-url
+          value: $(params.database-url)
+
+    - name: migrate
+      runAfter:
+        - show-pending
+      when:
+        - input: $(params.dry-run)
+          operator: in
+          values: ["false"]
+      taskSpec:
+        params:
+          - name: flyway-version
+            type: string
+          - name: database-url
+            type: string
+        workspaces:
+          - name: source
+          - name: db-credentials
+        results:
+          - name: migrations-applied
+            description: Number of migrations applied
+        steps:
+          - name: migrate
+            image: flyway/flyway:$(params.flyway-version)
+            workingDir: $(workspaces.source.path)
+            env:
+              - name: FLYWAY_URL
+                value: $(params.database-url)
+              - name: FLYWAY_USER
+                valueFrom:
+                  secretKeyRef:
+                    name: postgres-credentials
+                    key: username
+              - name: FLYWAY_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: postgres-credentials
+                    key: password
+            script: |
+              #!/bin/sh
+              set -eu
+
+              echo "=== Running Flyway Migrations ==="
+
+              MIGRATION_DIR="compose/mycolorforge-flyway/migrations"
+
+              flyway \
+                -locations="filesystem:${MIGRATION_DIR}" \
+                migrate
+
+              echo ""
+              echo "=== Migration Complete ==="
+
+              # Get count of applied migrations
+              flyway \
+                -locations="filesystem:${MIGRATION_DIR}" \
+                info | grep "Success" | wc -l > $(results.migrations-applied.path)
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+        - name: db-credentials
+          workspace: db-credentials
+      params:
+        - name: flyway-version
+          value: $(params.flyway-version)
+        - name: database-url
+          value: $(params.database-url)

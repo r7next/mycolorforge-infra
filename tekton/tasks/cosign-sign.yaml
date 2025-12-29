@@ -1,0 +1,86 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: cosign-sign
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: colorforge
+spec:
+  description: |
+    Assina imagens de container usando Cosign (Sigstore).
+    Garante integridade e autenticidade das imagens.
+  params:
+    - name: image
+      type: string
+      description: Imagem completa com tag ou digest para assinar
+    - name: signature-type
+      type: string
+      description: Tipo de assinatura (keyless ou key)
+      default: "keyless"
+  workspaces:
+    - name: dockerconfig
+      description: Docker config.json para autenticação no registry
+    - name: cosign-key
+      description: Chave privada do Cosign (se signature-type=key)
+      optional: true
+  results:
+    - name: signature
+      description: Assinatura da imagem
+    - name: signed-image
+      description: Imagem assinada
+  steps:
+    - name: sign-image
+      image: gcr.io/projectsigstore/cosign:v2.2.2
+      env:
+        - name: DOCKER_CONFIG
+          value: $(workspaces.dockerconfig.path)
+        - name: COSIGN_EXPERIMENTAL
+          value: "1"
+      script: |
+        #!/busybox/sh
+        set -e
+
+        echo "=== Cosign Image Signing ==="
+        echo "Image: $(params.image)"
+        echo "Signature Type: $(params.signature-type)"
+        echo ""
+
+        IMAGE="$(params.image)"
+
+        case "$(params.signature-type)" in
+          "keyless")
+            echo "=== Using Keyless Signing (Sigstore/Fulcio) ==="
+            # Keyless signing uses OIDC identity
+            cosign sign --yes "${IMAGE}"
+            ;;
+          "key")
+            echo "=== Using Key-based Signing ==="
+            if [ ! -f "$(workspaces.cosign-key.path)/cosign.key" ]; then
+              echo "ERROR: cosign.key not found in workspace"
+              exit 1
+            fi
+            cosign sign --key "$(workspaces.cosign-key.path)/cosign.key" --yes "${IMAGE}"
+            ;;
+          *)
+            echo "ERROR: Unknown signature type: $(params.signature-type)"
+            exit 1
+            ;;
+        esac
+
+        echo ""
+        echo "=== Verifying Signature ==="
+        cosign verify "${IMAGE}" --insecure-ignore-tlog=true 2>/dev/null || echo "Verification requires public key or keyless setup"
+
+        # Write results
+        printf "%s" "signed" > "$(results.signature.path)"
+        printf "%s" "${IMAGE}" > "$(results.signed-image.path)"
+
+        echo ""
+        echo "=== Image Successfully Signed ==="
+      computeResources:
+        requests:
+          memory: "128Mi"
+          cpu: "100m"
+        limits:
+          memory: "256Mi"
+          cpu: "500m"

@@ -1,0 +1,169 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: colorforge
+
+resources:
+- ../../base
+
+# Staging-specific labels
+labels:
+- pairs:
+    app.kubernetes.io/instance: staging
+    environment: staging
+
+# Staging-specific annotations
+commonAnnotations:
+  argocd.argoproj.io/sync-options: Prune=true
+
+# Image configuration - updated by Tekton pipeline
+images:
+- digest: sha256:a1768da32fbb9a716c98cd1b86e9e328557a94552e37662f2187b27fe00f41cd
+  name: harbor.local/colorforge/backend
+  newName: harbor.local/colorforge/backend
+- digest: sha256:810ee8601779ff22bf6c55b009e730d8e67c32c1fdce50983775ef70b3948184
+  name: harbor.local/colorforge/frontend
+  newName: harbor.local/colorforge/frontend
+- name: mycolorforge-api
+  newName: harbor.local/colorforge/backend
+  newTag: latest
+- name: mycolorforge-frontend
+  newName: harbor.local/colorforge/frontend
+  newTag: latest
+
+# Staging replica counts (lower than prod)
+replicas:
+- count: 1
+  name: api
+- count: 1
+  name: frontend
+
+# ConfigMap generator for staging config
+configMapGenerator:
+- behavior: create
+  literals:
+  - ENV=staging
+  - LOG_LEVEL=debug
+  - CORS_ORIGINS=https://colorforge.local,https://api.colorforge.local
+  name: colorforge-config
+
+# Patches for staging
+
+
+  # Update ingress for local environment
+patches:
+- patch: |
+    - op: add
+      path: /spec/template/spec/imagePullSecrets
+      value:
+        - name: harbor-pull-secret
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/requests/memory
+      value: "128Mi"
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/requests/cpu
+      value: "100m"
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/limits/memory
+      value: "256Mi"
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/limits/cpu
+      value: "300m"
+    - op: replace
+      path: /spec/template/spec/containers/0/env/2
+      value:
+        name: DATABASE_URL
+        valueFrom:
+          secretKeyRef:
+            name: postgres-credentials
+            key: DATABASE_URL
+    - op: replace
+      path: /spec/template/spec/containers/0/env/5
+      value:
+        name: CORS_ORIGINS
+        value: "https://colorforge.local,https://api.colorforge.local"
+    - op: replace
+      path: /spec/template/spec/containers/0/env/6
+      value:
+        name: OTEL_ENABLED
+        value: "true"
+    - op: replace
+      path: /spec/template/spec/containers/0/env/7
+      value:
+        name: OTEL_EXPORTER_OTLP_ENDPOINT
+        value: "otel-collector.observability.svc.cluster.local:4317"
+  target:
+    kind: Deployment
+    name: api
+- patch: |
+    - op: add
+      path: /spec/template/spec/imagePullSecrets
+      value:
+        - name: harbor-pull-secret
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/requests/memory
+      value: "128Mi"
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/requests/cpu
+      value: "100m"
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/limits/memory
+      value: "256Mi"
+    - op: replace
+      path: /spec/template/spec/containers/0/resources/limits/cpu
+      value: "300m"
+    - op: replace
+      path: /spec/template/spec/containers/0/env/0
+      value:
+        name: NEXT_PUBLIC_API_URL
+        value: "https://api.colorforge.local"
+    - op: replace
+      path: /spec/template/spec/containers/0/env/1
+      value:
+        name: NEXT_PUBLIC_APP_URL
+        value: "https://colorforge.local"
+  target:
+    kind: Deployment
+    name: frontend
+- patch: |
+    - op: replace
+      path: /metadata/annotations
+      value:
+        nginx.ingress.kubernetes.io/ssl-redirect: "true"
+        cert-manager.io/cluster-issuer: local-ca-issuer
+    - op: replace
+      path: /spec/ingressClassName
+      value: nginx
+    - op: replace
+      path: /spec/tls
+      value:
+        - hosts:
+            - colorforge.local
+            - api.colorforge.local
+          secretName: colorforge-tls
+    - op: replace
+      path: /spec/rules
+      value:
+        - host: colorforge.local
+          http:
+            paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: frontend-service
+                    port:
+                      number: 3000
+        - host: api.colorforge.local
+          http:
+            paths:
+              - path: /
+                pathType: Prefix
+                backend:
+                  service:
+                    name: api-service
+                    port:
+                      number: 8080
+  target:
+    kind: Ingress
+    name: mycolorforge-ingress

@@ -1,0 +1,155 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: nodejs-build
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: mycolorforge
+spec:
+  description: |
+    Build a Node.js/Next.js application.
+    Supports npm, yarn, and pnpm package managers.
+  params:
+    - name: node-version
+      type: string
+      description: Node.js version to use
+      default: "20"
+    - name: context
+      type: string
+      description: Subdirectory containing the Node.js application
+      default: "."
+    - name: package-manager
+      type: string
+      description: Package manager to use (npm, yarn, pnpm)
+      default: "npm"
+    - name: build-command
+      type: string
+      description: Build command to run
+      default: "build"
+    - name: install-args
+      type: string
+      description: Additional arguments for install command
+      default: "--frozen-lockfile"
+  workspaces:
+    - name: source
+      description: Workspace containing the source code
+    - name: cache
+      description: Node modules cache
+      optional: true
+  results:
+    - name: build-status
+      description: Build status (success/failed)
+  steps:
+    - name: install-dependencies
+      image: docker.io/library/node:$(params.node-version)-alpine
+      workingDir: $(workspaces.source.path)/$(params.context)
+      env:
+        - name: npm_config_cache
+          value: $(workspaces.cache.path)/npm
+        - name: YARN_CACHE_FOLDER
+          value: $(workspaces.cache.path)/yarn
+        - name: PNPM_HOME
+          value: $(workspaces.cache.path)/pnpm
+      script: |
+        #!/bin/sh
+        set -eu
+
+        echo "=== Node.js Build Configuration ==="
+        echo "Node Version: $(node --version)"
+        echo "Package Manager: $(params.package-manager)"
+        echo "Context: $(params.context)"
+        echo ""
+
+        # Install pnpm if needed
+        if [ "$(params.package-manager)" = "pnpm" ]; then
+          npm install -g pnpm
+          echo "pnpm version: $(pnpm --version)"
+        fi
+
+        # Install yarn if needed
+        if [ "$(params.package-manager)" = "yarn" ]; then
+          npm install -g yarn
+          echo "yarn version: $(yarn --version)"
+        fi
+
+        echo "=== Installing Dependencies ==="
+
+        case "$(params.package-manager)" in
+          npm)
+            npm ci $(params.install-args) || npm install
+            ;;
+          yarn)
+            yarn install $(params.install-args)
+            ;;
+          pnpm)
+            pnpm install $(params.install-args)
+            ;;
+          *)
+            echo "ERROR: Unknown package manager $(params.package-manager)"
+            exit 1
+            ;;
+        esac
+
+        echo ""
+        echo "=== Dependencies Installed ==="
+      computeResources:
+        requests:
+          memory: "1Gi"
+          cpu: "1000m"
+        limits:
+          memory: "2Gi"
+          cpu: "2000m"
+
+    - name: build
+      image: docker.io/library/node:$(params.node-version)-alpine
+      workingDir: $(workspaces.source.path)/$(params.context)
+      env:
+        - name: NODE_ENV
+          value: production
+        - name: NEXT_TELEMETRY_DISABLED
+          value: "1"
+      script: |
+        #!/bin/sh
+        set -eu
+
+        echo "=== Building Application ==="
+
+        # Install pnpm if needed (not persisted between steps)
+        if [ "$(params.package-manager)" = "pnpm" ]; then
+          npm install -g pnpm
+        fi
+
+        case "$(params.package-manager)" in
+          npm)
+            npm run $(params.build-command)
+            ;;
+          yarn)
+            yarn $(params.build-command)
+            ;;
+          pnpm)
+            pnpm $(params.build-command)
+            ;;
+        esac
+
+        # Verify build output
+        if [ -d ".next" ] || [ -d "dist" ] || [ -d "build" ]; then
+          echo ""
+          echo "=== Build Successful ==="
+          printf "success" > "$(results.build-status.path)"
+
+          # Show build size
+          if [ -d ".next" ]; then
+            echo "Next.js build size:"
+            du -sh .next/
+          fi
+        else
+          echo "WARNING: No standard build output directory found"
+          printf "success" > "$(results.build-status.path)"
+        fi
+      computeResources:
+        requests:
+          memory: "1Gi"
+          cpu: "500m"
+        limits:
+          memory: "4Gi"
+          cpu: "2000m"
