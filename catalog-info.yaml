@@ -1,0 +1,62 @@
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: colorforge
+  description: MyColorForge - Paint Management Platform
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - platform
+    - paints
+    - miniatures
+spec:
+  owner: team-colorforge
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: colorforge-infra
+  description: Infrastructure as Code - Kubernetes, Tekton, ArgoCD
+  annotations:
+    backstage.io/kubernetes-id: colorforge-infra
+    backstage.io/techdocs-ref: dir:.
+    github.com/project-slug: r7next/mycolorforge-infra
+  tags:
+    - infrastructure
+    - kubernetes
+    - tekton
+    - gitops
+  links:
+    - url: https://argocd.local
+      title: ArgoCD
+      icon: cloud
+    - url: https://tekton.local
+      title: Tekton Dashboard
+      icon: dashboard
+    - url: https://grafana.local
+      title: Grafana
+      icon: dashboard
+spec:
+  type: infrastructure
+  lifecycle: production
+  owner: team-colorforge
+  system: colorforge
+---
+apiVersion: backstage.io/v1alpha1
+kind: Resource
+metadata:
+  name: colorforge-cluster
+  description: Kubernetes cluster for ColorForge
+spec:
+  type: kubernetes-cluster
+  owner: team-colorforge
+  system: colorforge
+---
+apiVersion: backstage.io/v1alpha1
+kind: Group
+metadata:
+  name: team-colorforge
+  description: ColorForge Development Team
+spec:
+  type: team
+  children: []
