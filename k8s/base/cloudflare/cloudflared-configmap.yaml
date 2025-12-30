@@ -53,9 +53,9 @@ data:
         originRequest:
           noTLSVerify: true
 
-      # Tekton Dashboard - CI/CD pipeline management
+      # Tekton Dashboard - CI/CD pipeline management (via proxy with basic auth)
       - hostname: tekton.mycolorforge.com
-        service: http://tekton-dashboard.tekton-pipelines.svc.cluster.local:9097
+        service: http://tekton-dashboard-proxy.tekton-pipelines.svc.cluster.local:80
         originRequest:
           noTLSVerify: true
 

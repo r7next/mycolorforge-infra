@@ -14,12 +14,12 @@ spec:
   params:
     - name: git-url
       type: string
-      description: Git repository URL
-      default: https://github.com/your-org/mycolorforge.git
+      description: Git repository URL with Flyway migrations
+      default: https://github.com/r7next/mycolorforge-migrate.git
     - name: git-revision
       type: string
       description: Git revision containing migrations
-      default: main
+      default: master
     - name: flyway-version
       type: string
       description: Flyway version to use
@@ -92,7 +92,7 @@ spec:
 
               echo "=== Validating Flyway Migrations ==="
 
-              MIGRATION_DIR="compose/mycolorforge-flyway/migrations"
+              MIGRATION_DIR="migrations"
 
               if [ ! -d "${MIGRATION_DIR}" ]; then
                 echo "ERROR: Migration directory not found: ${MIGRATION_DIR}"
@@ -154,7 +154,7 @@ spec:
 
               echo "=== Migration Status ==="
 
-              MIGRATION_DIR="compose/mycolorforge-flyway/migrations"
+              MIGRATION_DIR="migrations"
 
               flyway \
                 -locations="filesystem:${MIGRATION_DIR}" \
@@ -214,7 +214,7 @@ spec:
 
               echo "=== Running Flyway Migrations ==="
 
-              MIGRATION_DIR="compose/mycolorforge-flyway/migrations"
+              MIGRATION_DIR="migrations"
 
               flyway \
                 -locations="filesystem:${MIGRATION_DIR}" \
