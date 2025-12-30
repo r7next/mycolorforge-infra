@@ -20,12 +20,15 @@ commonAnnotations:
 # Regras com digest são atualizadas automaticamente pelo pipeline
 # IMPORTANTE: Usar apenas nomes canônicos para evitar duplicação
 images:
-- name: mycolorforge-api
-  newName: harbor.local/colorforge/backend
-  digest: sha256:ed01751e63ff1e46c42b884fca7ae3ee3bd53b89465e47502d676a97a055e953
-- name: mycolorforge-frontend
+- digest: sha256:20ccafe1e8d61e91c5a88a3b2c993fd5da997535d035d2fc6d8e14577ed0fd2f
+  name: harbor.local/colorforge/frontend
   newName: harbor.local/colorforge/frontend
-  digest: sha256:4160e8edeede2986ba22cec8b2787928407d35462d19799ecedde546fc2cf2d3
+- digest: sha256:ed01751e63ff1e46c42b884fca7ae3ee3bd53b89465e47502d676a97a055e953
+  name: mycolorforge-api
+  newName: harbor.local/colorforge/backend
+- digest: sha256:4160e8edeede2986ba22cec8b2787928407d35462d19799ecedde546fc2cf2d3
+  name: mycolorforge-frontend
+  newName: harbor.local/colorforge/frontend
 
 # Staging replica counts (lower than prod)
 replicas:
@@ -47,6 +50,8 @@ configMapGenerator:
 
 
   # Update ingress for local environment
+    # NEXT_PUBLIC_* variables are embedded at build time via Tekton pipeline
+    # No runtime env vars needed for Next.js
 patches:
 - patch: |
     - op: add
