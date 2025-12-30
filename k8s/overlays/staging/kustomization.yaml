@@ -18,7 +18,7 @@ commonAnnotations:
 
 # Image configuration - updated by Tekton pipeline
 images:
-- digest: sha256:a1768da32fbb9a716c98cd1b86e9e328557a94552e37662f2187b27fe00f41cd
+- digest: sha256:dda524e2ad5dd7e7a798c1d3f390049de94e4e8c3cba0529d81c9b9b423b47a9
   name: harbor.local/colorforge/backend
   newName: harbor.local/colorforge/backend
 - digest: sha256:22acefc02b8537023b5a120e60e1945ffc230c2fb0c2aaca4b04c96d47c98962
