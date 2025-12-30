@@ -72,10 +72,24 @@ spec:
       value: "https://github.com/r7next/mycolorforge-front.git"
     - name: git-revision
       value: "$BRANCH"
-    - name: image-name
-      value: "ghcr.io/r7next/mycolorforge-front"
     - name: image-tag
       value: "manual-$(date +%Y%m%d-%H%M%S)"
+    - name: skip-tls-verify
+      value: "true"
+    # Staging URLs
+    - name: api-url
+      value: "https://api.colorforge.local/api/v1"
+    - name: app-url
+      value: "https://colorforge.local"
+    - name: storage-url
+      value: "https://minio.colorforge.local/mycolorforge"
+    - name: faro-enabled
+      value: "false"
+    # Skip security scans for manual builds
+    - name: security-scan-enabled
+      value: "false"
+    - name: sonar-enabled
+      value: "false"
   workspaces:
     - name: shared-workspace
       volumeClaimTemplate:
@@ -86,10 +100,12 @@ spec:
             requests:
               storage: 4Gi
           storageClassName: local-path
-    - name: npm-cache
-      emptyDir: {}
+    - name: node-cache
+      persistentVolumeClaim:
+        claimName: colorforge-npm-cache
     - name: trivy-cache
-      emptyDir: {}
+      persistentVolumeClaim:
+        claimName: colorforge-trivy-cache
     - name: docker-credentials
       secret:
         secretName: harbor-registry-credentials
@@ -99,6 +115,11 @@ spec:
     - name: sonar-credentials
       secret:
         secretName: sonarqube-credentials
+  taskRunTemplate:
+    serviceAccountName: tekton-pipeline-sa
+  timeouts:
+    pipeline: "30m0s"
+    tasks: "15m0s"
 EOF
     ;;
 
