@@ -82,7 +82,7 @@ patches:
       path: /spec/template/spec/containers/0/env/5
       value:
         name: CORS_ORIGINS
-        value: "https://colorforge.local,https://api.colorforge.local"
+        value: "https://colorforge.local,https://api.colorforge.local,https://mycolorforge.com,https://www.mycolorforge.com"
     - op: replace
       path: /spec/template/spec/containers/0/env/6
       value:
