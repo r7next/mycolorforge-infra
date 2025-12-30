@@ -35,7 +35,7 @@ data:
         originRequest:
           noTLSVerify: true
 
-      # Tekton Webhook - for Azure DevOps CI/CD triggers
+      # Tekton Webhook - for GitHub CI/CD triggers
       - hostname: webhook.mycolorforge.com
         service: http://el-colorforge-listener.tekton-pipelines.svc.cluster.local:8080
         originRequest:
@@ -74,6 +74,18 @@ data:
       # MinIO Console - admin interface
       - hostname: minio.mycolorforge.com
         service: http://minio-service.colorforge.svc.cluster.local:9001
+        originRequest:
+          noTLSVerify: true
+
+      # Backstage Developer Portal
+      - hostname: dev.mycolorforge.com
+        service: http://backstage.backstage.svc.cluster.local:7007
+        originRequest:
+          noTLSVerify: true
+
+      # SonarQube - Code Quality
+      - hostname: sonar.mycolorforge.com
+        service: http://sonarqube.sonarqube.svc.cluster.local:9000
         originRequest:
           noTLSVerify: true
 
