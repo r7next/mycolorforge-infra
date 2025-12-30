@@ -85,6 +85,10 @@ spec:
           - name: git-credentials
             secret:
               secretName: github-credentials
+          # SonarQube credentials for code analysis
+          - name: sonar-credentials
+            secret:
+              secretName: sonarqube-credentials
         taskRunTemplate:
           serviceAccountName: tekton-pipeline-sa
         timeouts:
@@ -188,6 +192,10 @@ spec:
           - name: git-credentials
             secret:
               secretName: github-credentials
+          # SonarQube credentials for code analysis
+          - name: sonar-credentials
+            secret:
+              secretName: sonarqube-credentials
         taskRunTemplate:
           serviceAccountName: tekton-pipeline-sa
         timeouts:
@@ -270,6 +278,10 @@ spec:
           - name: git-credentials
             secret:
               secretName: github-credentials
+          # SonarQube credentials for code analysis
+          - name: sonar-credentials
+            secret:
+              secretName: sonarqube-credentials
         taskRunTemplate:
           serviceAccountName: tekton-pipeline-sa
         timeouts:
