@@ -19,7 +19,7 @@ commonAnnotations:
 # Image configuration - updated by Tekton pipeline
 # Regras com digest são atualizadas automaticamente pelo pipeline
 images:
-- digest: sha256:2a4a8c605a53dad612cf9ac74b9a683784da358c90593eac1babfd5a164a63ac
+- digest: sha256:d16e7dca4e9d23323942b685a28158424926a1497dc8735647862a5dad2eea5a
   name: harbor.local/colorforge/backend
   newName: harbor.local/colorforge/backend
 - digest: sha256:dda524e2ad5dd7e7a798c1d3f390049de94e4e8c3cba0529d81c9b9b423b47a9
