@@ -1,3 +1,9 @@
+# Secret criado manualmente com:
+# kubectl create secret generic tekton-dashboard-auth \
+#   --from-literal=.htpasswd="$(htpasswd -nb admin 'SUA_SENHA_AQUI')" \
+#   -n tekton-pipelines
+# IMPORTANTE: A chave DEVE ser ".htpasswd" (com ponto) para o nginx encontrar
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:

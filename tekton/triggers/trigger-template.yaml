@@ -151,19 +151,18 @@ spec:
             value: $(tt.params.git-short-sha)
           - name: skip-tls-verify
             value: "true"
-          # Staging URLs embedded at build time
-          # TODO: Use different templates for staging vs production
+          # Production URLs embedded at build time
           - name: api-url
-            value: "https://api.colorforge.local/api/v1"
+            value: "https://api.mycolorforge.com/api/v1"
           - name: app-url
-            value: "https://colorforge.local"
+            value: "https://mycolorforge.com"
           - name: storage-url
-            value: "https://minio.colorforge.local/mycolorforge"
-          # Observability - disabled for local/staging
+            value: "https://storage.mycolorforge.com/mycolorforge"
+          # Observability - enabled for production
           - name: faro-enabled
-            value: "false"
+            value: "true"
           - name: faro-url
-            value: "https://otel.colorforge.local"
+            value: "https://otel.mycolorforge.com"
           - name: app-name
             value: "colorforge-frontend"
           - name: app-version
