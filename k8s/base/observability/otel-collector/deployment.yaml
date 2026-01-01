@@ -30,6 +30,9 @@ spec:
             - name: otlp-http
               containerPort: 4318
               protocol: TCP
+            - name: faro
+              containerPort: 4319
+              protocol: TCP
             - name: metrics
               containerPort: 8888
               protocol: TCP
