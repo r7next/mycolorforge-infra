@@ -47,9 +47,10 @@ data:
         originRequest:
           noTLSVerify: true
 
-      # OpenTelemetry Collector - for Faro frontend telemetry
+      # OpenTelemetry Collector - Faro receiver for frontend telemetry
+      # Port 4319 is the Faro receiver endpoint (not OTLP 4318)
       - hostname: otel.mycolorforge.com
-        service: http://otel-collector.observability.svc.cluster.local:4318
+        service: http://otel-collector.observability.svc.cluster.local:4319
         originRequest:
           noTLSVerify: true
 

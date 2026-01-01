@@ -20,6 +20,19 @@ data:
               allowed_headers:
                 - "*"
 
+      # Grafana Faro receiver for browser telemetry
+      # Endpoint: /collect (default Faro SDK path)
+      faro:
+        endpoint: 0.0.0.0:4319
+        cors:
+          allowed_origins:
+            - "https://mycolorforge.com"
+            - "https://www.mycolorforge.com"
+            - "http://localhost:3000"
+          allowed_headers:
+            - "*"
+          max_age: 7200
+
       # Prometheus receiver for scraping metrics
       prometheus:
         config:
@@ -121,16 +134,16 @@ data:
 
       pipelines:
         traces:
-          receivers: [otlp]
+          receivers: [otlp, faro]
           processors: [memory_limiter, filter, tail_sampling, batch, resource]
           exporters: [otlp/tempo]
 
         metrics:
-          receivers: [otlp, prometheus]
+          receivers: [otlp, prometheus, faro]
           processors: [memory_limiter, batch, resource]
           exporters: [prometheus]
 
         logs:
-          receivers: [otlp]
+          receivers: [otlp, faro]
           processors: [memory_limiter, batch, resource]
           exporters: [loki]
