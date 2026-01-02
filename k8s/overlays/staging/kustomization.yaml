@@ -20,7 +20,7 @@ commonAnnotations:
 # Regras com digest são atualizadas automaticamente pelo pipeline
 # IMPORTANTE: Usar apenas nomes canônicos para evitar duplicação
 images:
-- digest: sha256:a0c47beaba14267f21996ecb2e18823dc30bddc0bdfc0f14f0faddc21815db7d
+- digest: sha256:566418941a4e3b7770c149dfbcbce28c1a0eb88496cfdbb6a6e23f946d585232
   name: harbor.local/colorforge/backend
   newName: harbor.local/colorforge/backend
 - digest: sha256:90c38fcf281bf65e70fac68fc1e3716be8aba0aa9e9ee238f41e0f70b5175d42
@@ -53,6 +53,8 @@ configMapGenerator:
 
 
   # Update ingress for local environment
+    # NEXT_PUBLIC_* variables are embedded at build time via Tekton pipeline
+    # No runtime env vars needed for Next.js
     # NEXT_PUBLIC_* variables are embedded at build time via Tekton pipeline
     # No runtime env vars needed for Next.js
     # NEXT_PUBLIC_* variables are embedded at build time via Tekton pipeline
