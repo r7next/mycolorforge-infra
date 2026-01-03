@@ -23,7 +23,7 @@ images:
 - digest: sha256:2f7bd67046354054a06c297da3508c550fa3dd69f022edd21b216604687eae5d
   name: harbor.local/colorforge/backend
   newName: harbor.local/colorforge/backend
-- digest: sha256:c1148cfad3223179a8257edbf11a09913fe80e469e21e38c7f80f7f702f9cbcb
+- digest: sha256:cfa9730c2099cb61b8a76dff7d51d7a12b4e9647c4b66e079d834a76f1ce9b15
   name: harbor.local/colorforge/frontend
   newName: harbor.local/colorforge/frontend
 - digest: sha256:ed01751e63ff1e46c42b884fca7ae3ee3bd53b89465e47502d676a97a055e953
@@ -53,6 +53,8 @@ configMapGenerator:
 
 
   # Update ingress for local environment
+    # NEXT_PUBLIC_* variables are embedded at build time via Tekton pipeline
+    # No runtime env vars needed for Next.js
     # NEXT_PUBLIC_* variables are embedded at build time via Tekton pipeline
     # No runtime env vars needed for Next.js
     # NEXT_PUBLIC_* variables are embedded at build time via Tekton pipeline
