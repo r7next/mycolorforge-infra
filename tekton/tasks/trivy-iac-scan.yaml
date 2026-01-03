@@ -1,0 +1,153 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: trivy-iac-scan
+  namespace: tekton-pipelines
+  labels:
+    app.kubernetes.io/part-of: colorforge
+spec:
+  description: |
+    Scan de Infrastructure as Code usando Trivy.
+    Valida manifests Kubernetes, Dockerfiles, Terraform, etc.
+    Detecta misconfigurations e vulnerabilidades de seguranca.
+  params:
+    - name: source-path
+      type: string
+      description: Caminho dos arquivos IaC no workspace
+      default: "."
+    - name: severity
+      type: string
+      description: Severidades para reportar (UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL)
+      default: "MEDIUM,HIGH,CRITICAL"
+    - name: exit-code
+      type: string
+      description: Exit code quando encontrar issues (0=nao falha, 1=falha)
+      default: "1"
+    - name: skip-dirs
+      type: string
+      description: Diretorios para ignorar (separados por virgula)
+      default: "node_modules,vendor,.git,.next"
+    - name: config-checks
+      type: string
+      description: Habilitar checks de configuracao
+      default: "true"
+    - name: secret-checks
+      type: string
+      description: Habilitar checks de secrets
+      default: "true"
+  workspaces:
+    - name: source
+      description: Workspace com os arquivos IaC
+  results:
+    - name: misconfigs-count
+      description: Numero de misconfigurations encontradas
+    - name: critical-count
+      description: Numero de issues criticas
+    - name: high-count
+      description: Numero de issues altas
+    - name: scan-status
+      description: Status do scan (passed/failed)
+  steps:
+    - name: trivy-iac
+      image: aquasec/trivy:0.48.0
+      workingDir: $(workspaces.source.path)
+      script: |
+        #!/bin/sh
+        set -e
+
+        echo "=== Trivy IaC Scanner ==="
+        echo "Source Path: $(params.source-path)"
+        echo "Severity: $(params.severity)"
+        echo ""
+
+        # Construir opcoes de skip
+        SKIP_OPTS=""
+        IFS=','
+        for dir in $(params.skip-dirs); do
+          SKIP_OPTS="$SKIP_OPTS --skip-dirs $dir"
+        done
+        unset IFS
+
+        # Opcoes de scan
+        SCAN_OPTS=""
+        if [ "$(params.config-checks)" = "true" ]; then
+          SCAN_OPTS="$SCAN_OPTS --scanners misconfig"
+        fi
+        if [ "$(params.secret-checks)" = "true" ]; then
+          SCAN_OPTS="$SCAN_OPTS --scanners secret"
+        fi
+
+        # Se ambos, usar misconfig,secret
+        if [ "$(params.config-checks)" = "true" ] && [ "$(params.secret-checks)" = "true" ]; then
+          SCAN_OPTS="--scanners misconfig,secret"
+        fi
+
+        OUTPUT_FILE="/tmp/trivy-iac-results.json"
+
+        echo "=== Scanning IaC Files ==="
+        echo "Looking for: Kubernetes, Dockerfile, Terraform, CloudFormation..."
+        echo ""
+
+        SCAN_EXIT=0
+        trivy fs $(params.source-path) \
+          ${SCAN_OPTS} \
+          --severity $(params.severity) \
+          --exit-code $(params.exit-code) \
+          --format json \
+          --output ${OUTPUT_FILE} \
+          ${SKIP_OPTS} \
+          2>&1 || SCAN_EXIT=$?
+
+        # Mostrar resultado em tabela tambem
+        echo ""
+        echo "=== Results Table ==="
+        trivy fs $(params.source-path) \
+          ${SCAN_OPTS} \
+          --severity $(params.severity) \
+          --exit-code 0 \
+          ${SKIP_OPTS} \
+          2>&1 || true
+
+        echo ""
+        echo "=== Summary ==="
+
+        # Contar issues
+        CRITICAL=0
+        HIGH=0
+        MEDIUM=0
+        TOTAL=0
+
+        if [ -f "${OUTPUT_FILE}" ]; then
+          CRITICAL=$(grep -o '"Severity": "CRITICAL"' ${OUTPUT_FILE} 2>/dev/null | wc -l || echo "0")
+          HIGH=$(grep -o '"Severity": "HIGH"' ${OUTPUT_FILE} 2>/dev/null | wc -l || echo "0")
+          MEDIUM=$(grep -o '"Severity": "MEDIUM"' ${OUTPUT_FILE} 2>/dev/null | wc -l || echo "0")
+          TOTAL=$((CRITICAL + HIGH + MEDIUM))
+        fi
+
+        echo "Critical: ${CRITICAL}"
+        echo "High: ${HIGH}"
+        echo "Medium: ${MEDIUM}"
+        echo "Total: ${TOTAL}"
+
+        # Escrever resultados
+        printf "%s" "${TOTAL}" > "$(results.misconfigs-count.path)"
+        printf "%s" "${CRITICAL}" > "$(results.critical-count.path)"
+        printf "%s" "${HIGH}" > "$(results.high-count.path)"
+
+        if [ ${SCAN_EXIT} -eq 0 ]; then
+          printf "passed" > "$(results.scan-status.path)"
+          echo ""
+          echo "=== IaC Scan PASSED ==="
+        else
+          printf "failed" > "$(results.scan-status.path)"
+          echo ""
+          echo "=== IaC Scan FAILED - Misconfigurations found ==="
+          exit 1
+        fi
+      computeResources:
+        requests:
+          memory: "256Mi"
+          cpu: "100m"
+        limits:
+          memory: "1Gi"
+          cpu: "500m"

@@ -13,17 +13,22 @@ spec:
     Stages:
     1. Clone
     2. Gitleaks (Secret Scan) - paralelo com Build
-    3. Build + npm audit (SCA)
-    4. SonarQube (SAST) - paralelo com Build Image
+    3. Build + Grype (SCA) + Semgrep (SAST)
+    4. SonarQube (Quality) - paralelo com Build Image
     5. Build Image
     6. Trivy Scan (Container)
-    7. Update Manifests (GitOps)
+    7. SBOM Generation (Syft) - paralelo com Cosign
+    8. Cosign Sign (Image Signing)
+    9. Update Manifests (GitOps)
 
     DevSecOps:
-    - Gitleaks: Scan de secrets no código
-    - npm audit: Vulnerabilidades em dependências
-    - SonarQube: Análise estática de segurança
+    - Gitleaks: Scan de secrets no codigo
+    - Grype: Vulnerabilidades em dependencias (substitui OWASP)
+    - Semgrep: SAST focado em seguranca (complementa SonarQube)
+    - SonarQube: Qualidade de codigo e code smells
     - Trivy: Vulnerabilidades em containers
+    - Syft: SBOM (Software Bill of Materials)
+    - Cosign: Assinatura de imagens (Sigstore)
   params:
     # Git parameters
     - name: git-url
@@ -66,12 +71,20 @@ spec:
     # Security parameters
     - name: security-scan-enabled
       type: string
-      description: Enable security scans (Gitleaks, npm audit)
+      description: Enable security scans (Gitleaks, Grype, Semgrep)
+      default: "true"
+    - name: semgrep-enabled
+      type: string
+      description: Enable Semgrep SAST analysis
       default: "true"
     - name: fail-on-security-issues
       type: string
       description: Fail pipeline on security issues
-      default: "false"
+      default: "true"
+    - name: trivy-exit-code
+      type: string
+      description: Trivy exit code (1 = fail on vulnerabilities)
+      default: "1"
 
     # SonarQube parameters
     - name: sonar-enabled
@@ -81,7 +94,21 @@ spec:
     - name: sonar-quality-gate
       type: string
       description: Wait for Quality Gate result
-      default: "false"
+      default: "true"
+
+    # Supply Chain Security parameters
+    - name: cosign-enabled
+      type: string
+      description: Enable Cosign image signing
+      default: "true"
+    - name: sbom-enabled
+      type: string
+      description: Enable SBOM generation with Syft
+      default: "true"
+    - name: cosign-signature-type
+      type: string
+      description: Cosign signature type (keyless or key)
+      default: "keyless"
 
     # Environment URLs (embedded at build time)
     - name: api-url
@@ -139,6 +166,9 @@ spec:
       optional: true
     - name: sonar-credentials
       description: SonarQube credentials (token and host URL)
+      optional: true
+    - name: cosign-key
+      description: Cosign private key (if using key-based signing)
       optional: true
 
   tasks:
@@ -199,10 +229,10 @@ spec:
         - name: build-command
           value: build
 
-    # Stage 2c: npm audit - Dependency Scan (paralelo com build)
-    - name: npm-audit
+    # Stage 2c: Grype - Dependency Vulnerability Scan (substitui OWASP)
+    - name: grype
       taskRef:
-        name: owasp-dependency-check
+        name: grype-scan
       runAfter:
         - clone
       when:
@@ -213,12 +243,37 @@ spec:
         - name: source
           workspace: shared-workspace
       params:
-        - name: project-type
-          value: nodejs
         - name: source-path
           value: "."
-        - name: fail-on-cvss
-          value: "7"
+        - name: fail-on-severity
+          value: "high"
+        - name: output-format
+          value: "table"
+
+    # Stage 2d: Semgrep - Security-focused SAST (paralelo)
+    - name: semgrep
+      taskRef:
+        name: semgrep-scan
+      runAfter:
+        - clone
+      when:
+        - input: "$(params.semgrep-enabled)"
+          operator: in
+          values: ["true"]
+      workspaces:
+        - name: source
+          workspace: shared-workspace
+      params:
+        - name: source-path
+          value: "."
+        - name: config
+          value: "auto"
+        - name: severity
+          value: "WARNING"
+        - name: fail-on-findings
+          value: $(params.fail-on-security-issues)
+        - name: exclude-patterns
+          value: "node_modules,.next,dist,build,coverage"
 
     # Stage 3a: SonarQube Analysis (paralelo com build-image, após build)
     - name: sonarqube
@@ -306,16 +361,61 @@ spec:
         - name: severity
           value: "HIGH,CRITICAL"
         - name: exit-code
-          value: "0"
+          value: $(params.trivy-exit-code)
         - name: skip-tls-verify
           value: $(params.skip-tls-verify)
 
-    # Stage 5: Update Kubernetes manifests (GitOps)
+    # Stage 5a: SBOM Generation with Syft (paralelo com cosign-sign)
+    - name: sbom
+      taskRef:
+        name: syft-sbom
+      runAfter:
+        - trivy-scan
+      when:
+        - input: "$(params.sbom-enabled)"
+          operator: in
+          values: ["true"]
+      workspaces:
+        - name: output
+          workspace: shared-workspace
+        - name: dockerconfig
+          workspace: docker-credentials
+      params:
+        - name: image
+          value: $(params.image-registry)/$(params.image-repository):$(params.image-tag)
+        - name: output-format
+          value: "cyclonedx-json"
+        - name: output-file
+          value: "sbom.json"
+
+    # Stage 5b: Cosign - Image Signing (paralelo com sbom)
+    - name: cosign-sign
+      taskRef:
+        name: cosign-sign
+      runAfter:
+        - trivy-scan
+      when:
+        - input: "$(params.cosign-enabled)"
+          operator: in
+          values: ["true"]
+      workspaces:
+        - name: dockerconfig
+          workspace: docker-credentials
+        - name: cosign-key
+          workspace: cosign-key
+      params:
+        - name: image
+          value: $(params.image-registry)/$(params.image-repository):$(params.image-tag)
+        - name: signature-type
+          value: $(params.cosign-signature-type)
+
+    # Stage 6: Update Kubernetes manifests (GitOps)
     - name: update-manifests
       taskRef:
         name: kustomize-update
       runAfter:
-        - trivy-scan
+        - sbom
+        - cosign-sign
       workspaces:
         - name: source
           workspace: shared-workspace
