@@ -40,3 +40,9 @@ spec:
     - name: git-credentials
       secret:
         secretName: github-credentials
+    - name: trivy-cache
+      emptyDir: {}
+    - name: sonar-credentials
+      emptyDir: {}
+    - name: cosign-key
+      emptyDir: {}
