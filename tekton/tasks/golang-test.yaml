@@ -17,7 +17,7 @@ spec:
     - name: go-version
       type: string
       description: Go version to use
-      default: "1.23"
+      default: "1.24"
     - name: context
       type: string
       description: Subdirectory containing Go code
