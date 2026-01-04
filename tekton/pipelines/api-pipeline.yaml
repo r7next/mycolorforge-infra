@@ -216,7 +216,7 @@ spec:
         - name: source-path
           value: apps/api
         - name: fail-on-severity
-          value: "high"
+          value: "critical"
         - name: output-format
           value: "table"
 
