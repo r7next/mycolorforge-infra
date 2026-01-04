@@ -50,7 +50,7 @@ spec:
       script: |
         #!/bin/sh
         echo "=== Installing Grype ==="
-        wget -qO- https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.74.0
+        wget -qO- https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.104.3
 
         set -e
 
