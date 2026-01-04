@@ -41,10 +41,13 @@ spec:
       description: Status do scan (passed/failed)
   steps:
     - name: grype-scan
-      image: anchore/grype:v0.74.0
+      image: alpine:3.19
       workingDir: $(workspaces.source.path)/$(params.source-path)
       script: |
         #!/bin/sh
+        echo "=== Installing Grype ==="
+        wget -qO- https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin v0.74.0
+
         set -e
 
         echo "=== Grype Vulnerability Scanner ==="
