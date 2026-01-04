@@ -1,0 +1,204 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-backup-scripts
+  namespace: colorforge
+  labels:
+    app: postgres-backup
+    app.kubernetes.io/name: colorforge
+    app.kubernetes.io/component: backup
+data:
+  backup.sh: |
+    #!/bin/sh
+    set -e
+
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    BACKUP_FILE="colorforge_${TIMESTAMP}.sql.gz"
+    BACKUP_PATH="/backup/${BACKUP_FILE}"
+
+    echo "=== PostgreSQL Backup Started ==="
+    echo "Timestamp: ${TIMESTAMP}"
+    echo "Target: ${BACKUP_PATH}"
+
+    # Create backup using pg_dump
+    echo "Creating backup..."
+    PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump \
+      -h postgres-service \
+      -U "${POSTGRES_USER}" \
+      -d "${POSTGRES_DB}" \
+      --no-owner \
+      --no-privileges \
+      --clean \
+      --if-exists \
+      | gzip > "${BACKUP_PATH}"
+
+    BACKUP_SIZE=$(du -h "${BACKUP_PATH}" | cut -f1)
+    echo "Backup created: ${BACKUP_FILE} (${BACKUP_SIZE})"
+
+    # Upload to MinIO if mc is available
+    if command -v mc >/dev/null 2>&1 || [ -x /tools/mc ]; then
+      export PATH="/tools:$PATH"
+      echo "Uploading to MinIO..."
+      mc alias set minio http://${MINIO_ENDPOINT} ${MINIO_ACCESS_KEY} ${MINIO_SECRET_KEY}
+      mc mb --ignore-existing minio/${BACKUP_BUCKET}
+      mc cp "${BACKUP_PATH}" minio/${BACKUP_BUCKET}/postgres/
+      echo "Uploaded to: minio/${BACKUP_BUCKET}/postgres/${BACKUP_FILE}"
+
+      # Cleanup old backups in MinIO (keep last 7 days)
+      mc rm --recursive --force --older-than 7d minio/${BACKUP_BUCKET}/postgres/ 2>/dev/null || true
+    else
+      echo "MinIO client not available, backup stored locally only"
+    fi
+
+    # Cleanup old local backups (keep last 7)
+    echo "Cleaning up old local backups..."
+    ls -t /backup/colorforge_*.sql.gz 2>/dev/null | tail -n +8 | xargs rm -f 2>/dev/null || true
+
+    # List current backups
+    echo ""
+    echo "=== Current Local Backups ==="
+    ls -lh /backup/*.sql.gz 2>/dev/null || echo "No backups found"
+
+    echo ""
+    echo "=== Backup Completed Successfully ==="
+
+  restore.sh: |
+    #!/bin/sh
+    set -e
+
+    if [ -z "$1" ]; then
+      echo "Usage: restore.sh <backup_file>"
+      echo "Example: restore.sh colorforge_20240101_120000.sql.gz"
+      exit 1
+    fi
+
+    BACKUP_FILE="$1"
+    LOCAL_PATH="/backup/${BACKUP_FILE}"
+
+    echo "=== PostgreSQL Restore Started ==="
+    echo "Backup file: ${BACKUP_FILE}"
+
+    # Download from MinIO
+    echo "Downloading from MinIO..."
+    mc alias set minio http://${MINIO_ENDPOINT} ${MINIO_ACCESS_KEY} ${MINIO_SECRET_KEY}
+    mc cp minio/${BACKUP_BUCKET}/postgres/${BACKUP_FILE} "${LOCAL_PATH}"
+
+    # Restore
+    echo "Restoring database..."
+    gunzip -c "${LOCAL_PATH}" | PGPASSWORD="${POSTGRES_PASSWORD}" psql \
+      -h postgres-service \
+      -U "${POSTGRES_USER}" \
+      -d "${POSTGRES_DB}"
+
+    # Cleanup
+    rm -f "${LOCAL_PATH}"
+
+    echo "=== Restore Completed Successfully ==="
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-backup-pvc
+  namespace: colorforge
+  labels:
+    app: postgres-backup
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: colorforge
+  labels:
+    app: postgres-backup
+    app.kubernetes.io/name: colorforge
+    app.kubernetes.io/component: backup
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      activeDeadlineSeconds: 1800  # 30 minutes timeout
+      template:
+        metadata:
+          labels:
+            app: postgres-backup
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: backup
+              image: postgres:16-alpine
+              imagePullPolicy: IfNotPresent
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  /scripts/backup.sh
+              env:
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-credentials
+                      key: POSTGRES_USER
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-credentials
+                      key: POSTGRES_PASSWORD
+                - name: POSTGRES_DB
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-credentials
+                      key: POSTGRES_DB
+                - name: MINIO_ENDPOINT
+                  value: "minio-service:9000"
+                - name: MINIO_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: minio-credentials
+                      key: access-key
+                - name: MINIO_SECRET_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: minio-credentials
+                      key: secret-key
+                - name: BACKUP_BUCKET
+                  value: "colorforge-backups"
+              volumeMounts:
+                - name: backup-storage
+                  mountPath: /backup
+                - name: scripts
+                  mountPath: /scripts
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "100m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: false
+                capabilities:
+                  drop: [ALL]
+          volumes:
+            - name: backup-storage
+              persistentVolumeClaim:
+                claimName: postgres-backup-pvc
+            - name: scripts
+              configMap:
+                name: postgres-backup-scripts
+                defaultMode: 0755
+---
+# Manual backup: kubectl create job postgres-backup-now --from=cronjob/postgres-backup -n colorforge

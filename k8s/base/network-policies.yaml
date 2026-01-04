@@ -113,7 +113,15 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    # Apenas o API pode conectar ao PostgreSQL
+    # O API pode conectar ao PostgreSQL
+    - from:
+        - podSelector:
+            matchLabels:
+              app: postgres-backup
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Backup jobs podem conectar ao PostgreSQL
     - from:
         - podSelector:
             matchLabels:
