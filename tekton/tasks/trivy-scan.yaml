@@ -38,6 +38,10 @@ spec:
       type: string
       description: Scan timeout
       default: "10m"
+    - name: skip-tls-verify
+      type: string
+      description: Skip TLS verification for self-signed certs
+      default: "false"
   workspaces:
     - name: cache
       description: Trivy cache directory
@@ -62,6 +66,8 @@ spec:
           value: $(workspaces.cache.path)/trivy
         - name: DOCKER_CONFIG
           value: $(workspaces.dockerconfig.path)
+        - name: TRIVY_INSECURE
+          value: "$(params.skip-tls-verify)"
       script: |
         #!/bin/sh
         set -e
@@ -71,6 +77,7 @@ spec:
         echo "Severity Filter: $(params.severity)"
         echo "Exit on Vulnerabilities: $(params.exit-code)"
         echo "Ignore Unfixed: $(params.ignore-unfixed)"
+        echo "Skip TLS Verify: $(params.skip-tls-verify)"
         echo ""
 
         # Create cache directory
@@ -90,6 +97,10 @@ spec:
           TRIVY_ARGS="${TRIVY_ARGS} --skip-db-update"
         fi
 
+        if [ "$(params.skip-tls-verify)" = "true" ]; then
+          TRIVY_ARGS="${TRIVY_ARGS} --insecure"
+        fi
+
         # Also output JSON for parsing
         echo "=== Running Vulnerability Scan ==="
 
@@ -99,8 +110,14 @@ spec:
         SCAN_EXIT=$?
         set -e
 
+        # Build JSON args
+        JSON_ARGS="image --severity=$(params.severity) --format=json --timeout=$(params.timeout)"
+        if [ "$(params.skip-tls-verify)" = "true" ]; then
+          JSON_ARGS="${JSON_ARGS} --insecure"
+        fi
+
         # Run JSON scan for parsing
-        trivy image --severity=$(params.severity) --format=json --timeout=$(params.timeout) "$(params.image)" > scan-results.json 2>/dev/null || true
+        trivy ${JSON_ARGS} "$(params.image)" > scan-results.json 2>/dev/null || true
 
         # Parse results
         if [ -f scan-results.json ]; then
@@ -126,9 +143,15 @@ spec:
 
         # Determine pass/fail based on exit-code parameter
         if [ "$(params.exit-code)" = "1" ]; then
+          # Build check args
+          CHECK_ARGS="image --severity=$(params.severity) --exit-code=1 --quiet"
+          if [ "$(params.skip-tls-verify)" = "true" ]; then
+            CHECK_ARGS="${CHECK_ARGS} --insecure"
+          fi
+
           # Re-run with exit code to fail on vulnerabilities
           set +e
-          trivy image --severity=$(params.severity) --exit-code=1 --quiet "$(params.image)" > /dev/null 2>&1
+          trivy ${CHECK_ARGS} "$(params.image)" > /dev/null 2>&1
           CHECK_EXIT=$?
           set -e
 
