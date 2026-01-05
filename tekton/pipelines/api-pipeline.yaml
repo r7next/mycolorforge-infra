@@ -348,6 +348,8 @@ spec:
           value: "cyclonedx-json"
         - name: output-file
           value: "sbom.json"
+        - name: skip-tls-verify
+          value: $(params.skip-tls-verify)
 
     # Stage 5b: Cosign - Image Signing (paralelo com sbom)
     - name: cosign-sign
@@ -369,6 +371,8 @@ spec:
           value: $(params.image-registry)/$(params.image-repository):$(params.image-tag)
         - name: signature-type
           value: $(params.cosign-signature-type)
+        - name: skip-tls-verify
+          value: $(params.skip-tls-verify)
 
     # Stage 6: Update Kubernetes manifests (GitOps)
     - name: update-manifests

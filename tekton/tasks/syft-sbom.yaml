@@ -21,6 +21,10 @@ spec:
       type: string
       description: Nome do arquivo SBOM
       default: "sbom.json"
+    - name: skip-tls-verify
+      type: string
+      description: Skip TLS verification for self-signed certs
+      default: "false"
   workspaces:
     - name: output
       description: Workspace para salvar o SBOM
@@ -51,10 +55,18 @@ spec:
 
         OUTPUT_PATH="$(workspaces.output.path)/$(params.output-file)"
 
+        # Build syft args
+        SYFT_ARGS=""
+        if [ "$(params.skip-tls-verify)" = "true" ]; then
+          SYFT_ARGS="--insecure"
+          export SYFT_REGISTRY_INSECURE_SKIP_TLS_VERIFY=true
+        fi
+
         echo "=== Generating SBOM ==="
         syft "$(params.image)" \
           --output "$(params.output-format)=${OUTPUT_PATH}" \
-          --scope all-layers
+          --scope all-layers \
+          ${SYFT_ARGS}
 
         echo ""
         echo "=== SBOM Generated ==="
