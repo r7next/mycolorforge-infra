@@ -55,18 +55,16 @@ spec:
 
         OUTPUT_PATH="$(workspaces.output.path)/$(params.output-file)"
 
-        # Build syft args
-        SYFT_ARGS=""
+        # Set TLS skip if needed via environment variable
         if [ "$(params.skip-tls-verify)" = "true" ]; then
-          SYFT_ARGS="--insecure"
           export SYFT_REGISTRY_INSECURE_SKIP_TLS_VERIFY=true
+          echo "TLS verification disabled"
         fi
 
         echo "=== Generating SBOM ==="
         syft "$(params.image)" \
           --output "$(params.output-format)=${OUTPUT_PATH}" \
-          --scope all-layers \
-          ${SYFT_ARGS}
+          --scope all-layers
 
         echo ""
         echo "=== SBOM Generated ==="
