@@ -20,7 +20,7 @@ spec:
     - Ingress
 
 ---
-# API: Permite tráfego do Ingress e do Frontend
+# API: Permite tráfego do Ingress, Frontend e Cloudflared
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -55,6 +55,14 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+    # Permite tráfego do Cloudflared Tunnel (api.mycolorforge.com)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: cloudflared
+      ports:
+        - protocol: TCP
+          port: 8080
     # Permite scrape do Prometheus
     - from:
         - namespaceSelector:
@@ -68,7 +76,7 @@ spec:
           port: 8080
 
 ---
-# Frontend: Permite tráfego do Ingress
+# Frontend: Permite tráfego do Ingress e Cloudflared
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -92,6 +100,14 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 3000
+    # Permite tráfego do Cloudflared Tunnel (mycolorforge.com)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: cloudflared
       ports:
         - protocol: TCP
           port: 3000
@@ -157,7 +173,7 @@ spec:
           port: 6379
 
 ---
-# MinIO: Permite conexões do API e Ingress (para acesso público de imagens)
+# MinIO: Permite conexões do API, Ingress e Cloudflared (para acesso público de imagens)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -181,7 +197,7 @@ spec:
       ports:
         - protocol: TCP
           port: 9000
-    # Ingress pode servir imagens públicas
+    # Ingress Controllers (Traefik/Nginx)
     - from:
         - namespaceSelector:
             matchLabels:
@@ -189,6 +205,16 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 9000
+        - protocol: TCP
+          port: 9001
+    # Cloudflared Tunnel (mesmo namespace) para storage.mycolorforge.com
+    - from:
+        - podSelector:
+            matchLabels:
+              app: cloudflared
       ports:
         - protocol: TCP
           port: 9000
@@ -270,7 +296,7 @@ spec:
           port: 443
 
 ---
-# Egress: Permite Frontend acessar API
+# Egress: Permite Frontend acessar API e serviços externos
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -305,3 +331,104 @@ spec:
       ports:
         - protocol: TCP
           port: 8080
+    # External HTTPS (Next.js Image Optimization needs to fetch images from storage.mycolorforge.com)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+
+---
+# Egress: Permite Cloudflared acessar serviços internos para Cloudflare Tunnel
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-cloudflared-egress
+  namespace: colorforge
+  labels:
+    app.kubernetes.io/part-of: colorforge
+    app.kubernetes.io/component: tunnel
+spec:
+  podSelector:
+    matchLabels:
+      app: cloudflared
+  policyTypes:
+    - Egress
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Frontend
+    - to:
+        - podSelector:
+            matchLabels:
+              app: frontend
+      ports:
+        - protocol: TCP
+          port: 3000
+    # API
+    - to:
+        - podSelector:
+            matchLabels:
+              app: api
+      ports:
+        - protocol: TCP
+          port: 8080
+    # MinIO (storage)
+    - to:
+        - podSelector:
+            matchLabels:
+              app: minio
+      ports:
+        - protocol: TCP
+          port: 9000
+        - protocol: TCP
+          port: 9001
+    # Tekton Dashboard (different namespace)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: tekton-pipelines
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 9097
+    # Grafana (observability namespace)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: observability
+      ports:
+        - protocol: TCP
+          port: 3000
+    # External HTTPS (Cloudflare edge) - TCP for HTTPS, UDP for QUIC
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: UDP
+          port: 443
+        - protocol: TCP
+          port: 7844
+        - protocol: UDP
+          port: 7844
